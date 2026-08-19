@@ -107,6 +107,17 @@ this firmware.
 The bottom touchscreen tabs switch between the three pages. Core2's A, B, and C
 touch buttons provide additional shortcuts; Tab5 uses the on-screen tabs.
 
+### Unpair
+
+Press and hold the `PAIR` or `LIVE` status area in the upper-right corner for
+three seconds. The progress indicator must reach 100%; releasing early cancels
+the operation. The firmware disconnects the current host, removes all bonds
+stored on the device, and resumes advertising without rebooting.
+
+After `UNPAIRED — FORGET ON HOST` appears, also forget **Codex Micro** in the
+computer's Bluetooth settings. Device-side unpairing cannot remove the Bluetooth
+record stored by macOS.
+
 ### Tasks page
 
 | Control | Behavior |
@@ -185,6 +196,12 @@ NOTICE.md                 Copyright, trademarks, and disclaimers
   ChatGPT is enabled.
 - Forget and re-pair the device if the firmware's HID descriptor changed.
 
+### A previously paired host will not reconnect
+
+If the device was locally unpaired, forget **Codex Micro** in the host Bluetooth
+settings, then pair it again. Clearing only one side leaves mismatched bonding
+keys and prevents automatic reconnection.
+
 ### Display shows `Canvas allocation failed`
 
 The full-screen 16-bit framebuffer could not be allocated. Restart the device.
@@ -210,6 +227,8 @@ publish serial logs without checking them for environment-specific information.
 
 - BLE pairing uses bonding with a no-input/no-output, "Just Works" flow. Pair
   only in a trusted environment.
+- Holding the upper-right connection status for three seconds clears every bond
+  stored on the device; it does not alter the host's saved Bluetooth record.
 - The firmware has no network client and does not contact OpenAI directly.
   Control events and battery state are sent to the paired host over Bluetooth.
 - The vendor HID identifiers and protocol are used solely for compatibility and

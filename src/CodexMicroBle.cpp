@@ -10,6 +10,10 @@
 
 #include "BoardProfile.h"
 
+#if defined(CONFIG_BLUEDROID_ENABLED)
+#include <esp_gap_ble_api.h>
+#endif
+
 namespace {
 
 constexpr char kDeviceName[] = "Codex Micro";
@@ -67,7 +71,9 @@ class CodexMicroBle::ServerCallbacks final : public BLEServerCallbacks {
 
   void onDisconnect(BLEServer*) override {
     owner_.onConnected(false);
-    BLEDevice::startAdvertising();
+    if (!owner_.clearingBonds_.load()) {
+      BLEDevice::startAdvertising();
+    }
   }
 
  private:
@@ -97,10 +103,10 @@ void CodexMicroBle::begin() {
   security->setCapability(ESP_IO_CAP_NONE);
   security->setAuthenticationMode(ESP_LE_AUTH_BOND);
 
-  BLEServer* server = BLEDevice::createServer();
-  server->setCallbacks(new ServerCallbacks(*this));
+  server_ = BLEDevice::createServer();
+  server_->setCallbacks(new ServerCallbacks(*this));
 
-  hid_ = new BLEHIDDevice(server);
+  hid_ = new BLEHIDDevice(server_);
   hid_->manufacturer()->setValue(kManufacturer);
   // Low release bits mark the transport as wireless in the desktop bridge.
   // Both selected Arduino BLE implementations serialize these fields
@@ -162,6 +168,68 @@ void CodexMicroBle::sendJoystick(float angle, float distance) {
   String json;
   serializeJson(message, json);
   sendJson(json);
+}
+
+bool CodexMicroBle::clearBonds() {
+  clearingBonds_ = true;
+  BLEDevice::getAdvertising()->stop();
+  bool success = true;
+
+  if (server_ != nullptr && connected()) {
+    Serial.println("Disconnecting BLE host for unpair");
+    server_->disconnect(server_->getConnId());
+    const uint32_t deadline = millis() + 2000;
+    while (connected() && static_cast<int32_t>(deadline - millis()) > 0) {
+      delay(10);
+    }
+    if (connected()) {
+      Serial.println("BLE host disconnect timed out during unpair");
+      success = false;
+    }
+  }
+
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  int count = esp_ble_get_bond_device_num();
+  if (count > 0) {
+    auto* bonds = static_cast<esp_ble_bond_dev_t*>(
+        calloc(static_cast<size_t>(count), sizeof(esp_ble_bond_dev_t)));
+    if (bonds == nullptr) {
+      success = false;
+    } else {
+      int listed = count;
+      if (esp_ble_get_bond_device_list(&listed, bonds) != ESP_OK) {
+        success = false;
+      } else {
+        for (int i = 0; i < listed; ++i) {
+          if (esp_ble_remove_bond_device(bonds[i].bd_addr) != ESP_OK) {
+            success = false;
+          }
+          delay(20);
+        }
+      }
+      free(bonds);
+    }
+  }
+#elif defined(CONFIG_NIMBLE_ENABLED)
+  ble_addr_t peers[MYNEWT_VAL(BLE_STORE_MAX_BONDS)];
+  int count = 0;
+  if (ble_store_util_bonded_peers(peers, &count, MYNEWT_VAL(BLE_STORE_MAX_BONDS)) != 0) {
+    success = false;
+  } else {
+    for (int i = 0; i < count; ++i) {
+      if (ble_store_util_delete_peer(&peers[i]) != 0) {
+        success = false;
+      }
+    }
+  }
+#else
+  success = false;
+#endif
+
+  clearingBonds_ = false;
+  BLEDevice::startAdvertising();
+  Serial.printf("BLE bonds clear %s\n", success ? "complete" : "failed");
+  return success;
 }
 
 bool CodexMicroBle::connected() {

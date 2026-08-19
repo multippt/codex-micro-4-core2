@@ -227,6 +227,14 @@ Works" pairing flow without passkey verification. This is convenient for a
 keyboard-class accessory but does not authenticate the user through a displayed
 or entered code. Pair the device in a trusted physical and radio environment.
 
+Holding the upper-right connection status for three seconds invokes the
+transport's local bond-clear operation. Advertising is paused, the active
+connection is terminated, and all stored bonds are removed. Core2 enumerates
+and removes Bluedroid bond records; Tab5 enumerates bonded NimBLE peers and
+removes each with `ble_store_util_delete_peer()`. Advertising then resumes in the same runtime.
+The UI reports success or failure for five seconds and reminds the user that the
+host-side Bluetooth record must be removed separately.
+
 The firmware does not contain Wi-Fi credentials, an OpenAI API client, analytics,
 or an update service. It sends control events and device status to the connected
 BLE host. Host behavior, microphone access, and task data remain responsibilities

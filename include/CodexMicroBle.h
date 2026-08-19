@@ -10,6 +10,7 @@
 #include <BLEServer.h>
 
 #include <array>
+#include <atomic>
 
 struct ThreadLight {
   uint32_t color = 0;
@@ -43,6 +44,7 @@ class CodexMicroBle {
   void setBattery(uint8_t percentage, bool charging);
   void sendKey(const char* key, uint8_t action, int8_t agent = -1);
   void sendJoystick(float angle, float distance);
+  bool clearBonds();
   bool connected();
   CodexMicroState snapshot();
 
@@ -60,6 +62,7 @@ class CodexMicroBle {
   void updateLightingSide(LightingSide& side, JsonObjectConst value);
 
   BLEHIDDevice* hid_ = nullptr;
+  BLEServer* server_ = nullptr;
   BLECharacteristic* input_ = nullptr;
   BLECharacteristic* output_ = nullptr;
   SemaphoreHandle_t stateMutex_ = nullptr;
@@ -67,4 +70,5 @@ class CodexMicroBle {
   String rpcBuffer_;
   uint8_t batteryPercentage_ = 100;
   bool charging_ = false;
+  std::atomic<bool> clearingBonds_{false};
 };

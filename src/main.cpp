@@ -12,6 +12,7 @@
 namespace {
 
 enum class Page : uint8_t { Tasks, Commands, Navigate };
+enum class UnpairNotice : uint8_t { None, Success, Failure };
 
 struct TouchAction {
   const char* key = nullptr;
@@ -62,6 +63,14 @@ bool touchActive = false;
 uint32_t lastDrawMs = 0;
 uint32_t lastBatteryMs = 0;
 Layout layout{};
+bool unpairHolding = false;
+bool unpairTriggered = false;
+uint32_t unpairHoldStartMs = 0;
+uint32_t unpairNoticeUntilMs = 0;
+UnpairNotice unpairNotice = UnpairNotice::None;
+
+constexpr uint32_t kUnpairHoldMs = 3000;
+constexpr uint32_t kUnpairNoticeMs = 5000;
 
 void updateLayout() {
   layout.width = M5.Display.width();
@@ -102,8 +111,45 @@ void drawHeader() {
   canvas.setTextDatum(middle_right);
   canvas.setTextSize(layout.textScale);
   canvas.setTextColor(kMuted);
-  canvas.drawString(state.connected ? "LIVE" : "PAIR", layout.width - layout.margin,
-                    layout.headerHeight / 2);
+  char status[20];
+  if (unpairHolding) {
+    const uint32_t elapsed = min<uint32_t>(kUnpairHoldMs, millis() - unpairHoldStartMs);
+    snprintf(status, sizeof(status), "UNPAIR %lu%%",
+             static_cast<unsigned long>(elapsed * 100 / kUnpairHoldMs));
+  } else if (unpairTriggered) {
+    snprintf(status, sizeof(status), "UNPAIRING");
+  } else {
+    snprintf(status, sizeof(status), "%s", state.connected ? "LIVE" : "PAIR");
+  }
+  canvas.drawString(status, layout.width - layout.margin, layout.headerHeight / 2);
+
+  if (unpairHolding) {
+    const int barWidth = layout.width / 3;
+    const int filled = static_cast<int>(barWidth *
+        min<uint32_t>(kUnpairHoldMs, millis() - unpairHoldStartMs) / kUnpairHoldMs);
+    canvas.fillRect(layout.width - barWidth, layout.headerHeight - 3 * layout.textScale,
+                    filled, 3 * layout.textScale, kAccent);
+  }
+}
+
+void drawUnpairNotice() {
+  if (unpairNotice == UnpairNotice::None) return;
+  const int width = layout.width * 4 / 5;
+  const int height = max(70, layout.height / 4);
+  const int x = (layout.width - width) / 2;
+  const int y = (layout.height - height) / 2;
+  canvas.fillRoundRect(x, y, width, height, 8 * layout.textScale, kPanel);
+  canvas.drawRoundRect(x, y, width, height, 8 * layout.textScale,
+                       unpairNotice == UnpairNotice::Success ? 0x07E0 : 0xF800);
+  if (unpairNotice == UnpairNotice::Success) {
+    drawCentered("UNPAIRED", layout.width / 2, y + height * 2 / 5,
+                 2 * layout.textScale, kText);
+    drawCentered("FORGET ON HOST", layout.width / 2, y + height * 3 / 5,
+                 layout.textScale, kMuted);
+  } else {
+    drawCentered("UNPAIR FAILED", layout.width / 2, y + height / 2,
+                 2 * layout.textScale, 0xF800);
+  }
 }
 
 void drawTabs() {
@@ -225,12 +271,34 @@ void drawScreen() {
       break;
   }
   drawTabs();
+  drawUnpairNotice();
   canvas.pushSprite(0, 0);
   lastDrawMs = millis();
 }
 
 bool inRect(int x, int y, int left, int top, int width, int height) {
   return x >= left && x < left + width && y >= top && y < top + height;
+}
+
+bool isUnpairTarget(int x, int y) {
+  return y >= 0 && y < layout.headerHeight && x >= layout.width * 2 / 3;
+}
+
+void startUnpairHold() {
+  unpairHolding = true;
+  unpairTriggered = false;
+  unpairHoldStartMs = millis();
+  drawScreen();
+}
+
+void finishUnpairHold() {
+  unpairHolding = false;
+  unpairTriggered = true;
+  drawScreen();
+  const bool success = codex.clearBonds();
+  unpairNotice = success ? UnpairNotice::Success : UnpairNotice::Failure;
+  unpairNoticeUntilMs = millis() + kUnpairNoticeMs;
+  drawScreen();
 }
 
 TouchAction actionAt(int x, int y) {
@@ -365,10 +433,35 @@ void loop() {
   M5.update();
   const auto touch = M5.Touch.getDetail();
   if (touch.wasPressed()) {
-    pressAction(actionAt(touch.x, touch.y));
+    if (!unpairTriggered && isUnpairTarget(touch.x, touch.y)) {
+      startUnpairHold();
+    } else if (!unpairTriggered) {
+      pressAction(actionAt(touch.x, touch.y));
+    }
   }
   if (touch.wasReleased()) {
-    releaseAction();
+    if (unpairHolding && millis() - unpairHoldStartMs >= kUnpairHoldMs) {
+      finishUnpairHold();
+      unpairTriggered = false;
+    } else if (unpairHolding || unpairTriggered) {
+      unpairHolding = false;
+      unpairTriggered = false;
+      drawScreen();
+    } else {
+      releaseAction();
+    }
+  }
+
+  if (unpairHolding && millis() - unpairHoldStartMs >= kUnpairHoldMs) {
+    finishUnpairHold();
+  } else if (unpairHolding && millis() - lastDrawMs >= 80) {
+    drawScreen();
+  }
+
+  if (unpairNotice != UnpairNotice::None &&
+      static_cast<int32_t>(millis() - unpairNoticeUntilMs) >= 0) {
+    unpairNotice = UnpairNotice::None;
+    drawScreen();
   }
 
   if (kHasPageButtons && M5.BtnA.wasPressed()) {
