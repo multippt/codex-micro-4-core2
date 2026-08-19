@@ -8,11 +8,12 @@
 #include <BLESecurity.h>
 #include <BLEUtils.h>
 
+#include "BoardProfile.h"
+
 namespace {
 
 constexpr char kDeviceName[] = "Codex Micro";
 constexpr char kManufacturer[] = "Work Louder";
-constexpr char kFirmwareVersion[] = "0.1.0-core2";
 constexpr size_t kPayloadSize = 61;
 constexpr size_t kReportBodySize = 63;
 
@@ -45,9 +46,15 @@ class SecurityCallbacks final : public BLESecurityCallbacks {
   uint32_t onPassKeyRequest() override { return 0; }
   void onPassKeyNotify(uint32_t) override {}
   bool onConfirmPIN(uint32_t) override { return true; }
+  #if defined(CONFIG_BLUEDROID_ENABLED)
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
     Serial.printf("BLE pairing %s\n", result.success ? "complete" : "failed");
   }
+  #elif defined(CONFIG_NIMBLE_ENABLED)
+  void onAuthenticationComplete(ble_gap_conn_desc* result) override {
+    Serial.printf("BLE pairing %s\n", result != nullptr ? "complete" : "failed");
+  }
+  #endif
 };
 
 }  // namespace
@@ -72,8 +79,8 @@ class CodexMicroBle::OutputCallbacks final : public BLECharacteristicCallbacks {
   explicit OutputCallbacks(CodexMicroBle& owner) : owner_(owner) {}
 
   void onWrite(BLECharacteristic* characteristic) override {
-    const std::string value = characteristic->getValue();
-    owner_.onOutput(reinterpret_cast<const uint8_t*>(value.data()), value.size());
+    const auto value = characteristic->getValue();
+    owner_.onOutput(reinterpret_cast<const uint8_t*>(value.c_str()), value.length());
   }
 
  private:
@@ -96,8 +103,8 @@ void CodexMicroBle::begin() {
   hid_ = new BLEHIDDevice(server);
   hid_->manufacturer()->setValue(kManufacturer);
   // Low release bits mark the transport as wireless in the desktop bridge.
-  // Arduino-ESP32 2.x serializes these fields big-endian, while the BLE PnP
-  // characteristic is little-endian. Pre-swap so macOS enumerates 303A:8360.
+  // Both selected Arduino BLE implementations serialize these fields
+  // big-endian, while the PnP characteristic is defined as little-endian.
   hid_->pnp(0x02, swapBytes(kVendorId), swapBytes(kProductId), swapBytes(0x0101));
   hid_->hidInfo(0x00, 0x01);
   hid_->reportMap(const_cast<uint8_t*>(kReportMap), sizeof(kReportMap));

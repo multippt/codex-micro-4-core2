@@ -6,6 +6,7 @@
 
 #include <cmath>
 
+#include "BoardProfile.h"
 #include "CodexMicroBle.h"
 
 namespace {
@@ -35,9 +36,18 @@ constexpr uint16_t kPanelPressed = 0x31A6;
 constexpr uint16_t kText = 0xFFFF;
 constexpr uint16_t kMuted = 0x9CF3;
 constexpr uint16_t kAccent = 0x2E73;
-constexpr int kHeaderHeight = 30;
-constexpr int kTabHeight = 28;
-constexpr int kContentBottom = 240 - kTabHeight;
+
+struct Layout {
+  int width;
+  int height;
+  int headerHeight;
+  int tabHeight;
+  int contentTop;
+  int contentBottom;
+  int margin;
+  int gap;
+  int textScale;
+};
 
 const char* kAgentKeys[] = {"AG00", "AG01", "AG02", "AG03", "AG04", "AG05"};
 const char* kCommandKeys[] = {"ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT12"};
@@ -51,6 +61,19 @@ TouchAction activeAction;
 bool touchActive = false;
 uint32_t lastDrawMs = 0;
 uint32_t lastBatteryMs = 0;
+Layout layout{};
+
+void updateLayout() {
+  layout.width = M5.Display.width();
+  layout.height = M5.Display.height();
+  layout.headerHeight = max(30, layout.height / 8);
+  layout.tabHeight = max(28, layout.height / 9);
+  layout.contentTop = layout.headerHeight;
+  layout.contentBottom = layout.height - layout.tabHeight;
+  layout.margin = max(5, layout.width / 64);
+  layout.gap = max(5, layout.width / 64);
+  layout.textScale = max(1, layout.height / 240);
+}
 
 uint16_t rgb888To565(uint32_t color, float brightness = 1.0f) {
   const uint8_t red = ((color >> 16) & 0xFF) * brightness;
@@ -67,28 +90,32 @@ void drawCentered(const char* text, int x, int y, int font = 1, uint16_t color =
 }
 
 void drawHeader() {
-  canvas.fillRect(0, 0, 320, kHeaderHeight, kBackground);
+  canvas.fillRect(0, 0, layout.width, layout.headerHeight, kBackground);
   canvas.setTextDatum(middle_left);
-  canvas.setTextSize(2);
+  canvas.setTextSize(2 * layout.textScale);
   canvas.setTextColor(kText);
-  canvas.drawString("CODEX MICRO", 8, 15);
+  canvas.drawString("CODEX MICRO", layout.margin, layout.headerHeight / 2);
 
   const uint16_t dot = state.connected ? 0x07E0 : 0xF800;
-  canvas.fillCircle(278, 15, 4, dot);
+  const int dotX = layout.width - layout.margin - 95 * layout.textScale;
+  canvas.fillCircle(dotX, layout.headerHeight / 2, 4 * layout.textScale, dot);
   canvas.setTextDatum(middle_right);
-  canvas.setTextSize(1);
+  canvas.setTextSize(layout.textScale);
   canvas.setTextColor(kMuted);
-  canvas.drawString(state.connected ? "LIVE" : "PAIR", 316, 15);
+  canvas.drawString(state.connected ? "LIVE" : "PAIR", layout.width - layout.margin,
+                    layout.headerHeight / 2);
 }
 
 void drawTabs() {
   const char* labels[] = {"TASKS", "COMMANDS", "NAVIGATE"};
   for (int i = 0; i < 3; ++i) {
-    const int x = i * 106 + (i == 2 ? 0 : 1);
-    const int width = i == 2 ? 108 : 106;
+    const int x = i * layout.width / 3;
+    const int width = (i + 1) * layout.width / 3 - x;
     const bool selected = static_cast<int>(page) == i;
-    canvas.fillRect(x, kContentBottom, width, kTabHeight, selected ? kAccent : kPanel);
-    drawCentered(labels[i], x + width / 2, kContentBottom + kTabHeight / 2, 1,
+    canvas.fillRect(x, layout.contentBottom, width, layout.tabHeight,
+                    selected ? kAccent : kPanel);
+    drawCentered(labels[i], x + width / 2, layout.contentBottom + layout.tabHeight / 2,
+                 layout.textScale,
                  selected ? kText : kMuted);
   }
 }
@@ -98,18 +125,22 @@ void drawButton(int x, int y, int width, int height, const char* label, uint16_t
   canvas.fillRoundRect(x, y, width, height, 6, pressed ? kPanelPressed : kPanel);
   canvas.drawRoundRect(x, y, width, height, 6, border);
   drawCentered(label, x + width / 2, y + height / 2 - (sublabel ? 7 : 0),
-               strlen(label) > 7 ? 1 : 2, kText);
+               (strlen(label) > 7 ? 1 : 2) * layout.textScale, kText);
   if (sublabel != nullptr) {
-    drawCentered(sublabel, x + width / 2, y + height / 2 + 13, 1, kMuted);
+    drawCentered(sublabel, x + width / 2, y + height / 2 + 13 * layout.textScale,
+                 layout.textScale, kMuted);
   }
 }
 
 void drawTasks() {
+  const int buttonWidth = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
+  const int buttonHeight = (layout.contentBottom - layout.contentTop -
+                            2 * layout.margin - layout.gap) / 2;
   for (int i = 0; i < 6; ++i) {
     const int row = i / 3;
     const int col = i % 3;
-    const int x = 5 + col * 105;
-    const int y = 35 + row * 87;
+    const int x = layout.margin + col * (buttonWidth + layout.gap);
+    const int y = layout.contentTop + layout.margin + row * (buttonHeight + layout.gap);
     const ThreadLight& light = state.threads[i];
     float pulse = 1.0f;
     if (light.effect == "breath") {
@@ -122,36 +153,59 @@ void drawTasks() {
     snprintf(title, sizeof(title), "AGENT %d", i + 1);
     const char* status = light.brightness <= 0.01f ? "UNASSIGNED" : light.effect.c_str();
     const bool pressed = touchActive && activeAction.agent == i;
-    drawButton(x, y, 100, 80, title, color, pressed, status);
-    canvas.fillCircle(x + 88, y + 12, 4, color);
+    drawButton(x, y, buttonWidth, buttonHeight, title, color, pressed, status);
+    canvas.fillCircle(x + buttonWidth - 12 * layout.textScale,
+                      y + 12 * layout.textScale, 4 * layout.textScale, color);
   }
 }
 
 void drawCommands() {
+  const int buttonWidth = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
+  const int buttonHeight = (layout.contentBottom - layout.contentTop -
+                            2 * layout.margin - layout.gap) / 2;
   for (int i = 0; i < 6; ++i) {
     const int row = i / 3;
     const int col = i % 3;
-    const int x = 5 + col * 105;
-    const int y = 35 + row * 87;
+    const int x = layout.margin + col * (buttonWidth + layout.gap);
+    const int y = layout.contentTop + layout.margin + row * (buttonHeight + layout.gap);
     const bool pressed = touchActive && activeAction.key == kCommandKeys[i];
     const char* hint = i == 4 ? "HOLD / 2X" : "TAP";
-    drawButton(x, y, 100, 80, kCommandLabels[i], i == 1 ? 0x07E0 : kAccent, pressed, hint);
+    drawButton(x, y, buttonWidth, buttonHeight, kCommandLabels[i],
+               i == 1 ? 0x07E0 : kAccent, pressed, hint);
   }
 }
 
 void drawNavigate() {
-  drawButton(18, 42, 70, 48, "UP", kAccent, touchActive && activeAction.joystick && activeAction.angle == 0.75f);
-  drawButton(18, 148, 70, 48, "DOWN", kAccent, touchActive && activeAction.joystick && activeAction.angle == 0.25f);
-  drawButton(2, 95, 70, 48, "LEFT", kAccent, touchActive && activeAction.joystick && activeAction.angle == 0.5f);
-  drawButton(76, 95, 70, 48, "RIGHT", kAccent, touchActive && activeAction.joystick && activeAction.angle == 0.0f);
+  const int top = layout.contentTop + layout.margin;
+  const int availableHeight = layout.contentBottom - top - layout.margin;
+  const int leftWidth = (layout.width - 3 * layout.margin) * 46 / 100;
+  const int rightX = 2 * layout.margin + leftWidth;
+  const int rightWidth = layout.width - rightX - layout.margin;
+  const int dpadWidth = leftWidth * 48 / 100;
+  const int dpadHeight = availableHeight * 30 / 100;
+  const int centerY = top + availableHeight / 2;
+  drawButton(layout.margin + dpadWidth / 2, top, dpadWidth, dpadHeight, "UP", kAccent,
+             touchActive && activeAction.joystick && activeAction.angle == 0.75f);
+  drawButton(layout.margin + dpadWidth / 2, top + availableHeight - dpadHeight,
+             dpadWidth, dpadHeight, "DOWN", kAccent,
+             touchActive && activeAction.joystick && activeAction.angle == 0.25f);
+  drawButton(layout.margin, centerY - dpadHeight / 2, dpadWidth, dpadHeight, "LEFT", kAccent,
+             touchActive && activeAction.joystick && activeAction.angle == 0.5f);
+  drawButton(layout.margin + dpadWidth, centerY - dpadHeight / 2, dpadWidth, dpadHeight,
+             "RIGHT", kAccent,
+             touchActive && activeAction.joystick && activeAction.angle == 0.0f);
 
-  drawButton(166, 42, 68, 64, "CCW", 0xFFE0,
+  const int encoderGap = layout.gap;
+  const int encoderWidth = (rightWidth - encoderGap) / 2;
+  const int encoderHeight = availableHeight * 38 / 100;
+  drawButton(rightX, top, encoderWidth, encoderHeight, "CCW", 0xFFE0,
              touchActive && activeAction.key != nullptr && strcmp(activeAction.key, "ENC_CC") == 0,
              "NEXT");
-  drawButton(244, 42, 68, 64, "CW", 0xFFE0,
+  drawButton(rightX + encoderWidth + encoderGap, top, encoderWidth, encoderHeight, "CW", 0xFFE0,
              touchActive && activeAction.key != nullptr && strcmp(activeAction.key, "ENC_CW") == 0,
              "PREV");
-  drawButton(166, 118, 146, 78, "DIAL", 0xFFE0,
+  drawButton(rightX, top + encoderHeight + layout.gap, rightWidth,
+             availableHeight - encoderHeight - layout.gap, "DIAL", 0xFFE0,
              touchActive && activeAction.key != nullptr && strcmp(activeAction.key, "ENC") == 0,
              "TAP / HOLD SETTINGS");
 }
@@ -180,38 +234,54 @@ bool inRect(int x, int y, int left, int top, int width, int height) {
 }
 
 TouchAction actionAt(int x, int y) {
-  if (y >= kContentBottom) {
-    page = static_cast<Page>(min(2, x / 106));
+  if (y >= layout.contentBottom) {
+    page = static_cast<Page>(min(2, x * 3 / layout.width));
     drawScreen();
     return {};
   }
 
   if (page == Page::Tasks) {
-    if (x >= 5 && y >= 35) {
-      const int col = (x - 5) / 105;
-      const int row = (y - 35) / 87;
-      if (col < 3 && row < 2 && inRect(x, y, 5 + col * 105, 35 + row * 87, 100, 80)) {
+    const int bw = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
+    const int bh = (layout.contentBottom - layout.contentTop - 2 * layout.margin - layout.gap) / 2;
+    if (x >= layout.margin && y >= layout.contentTop + layout.margin) {
+      const int col = (x - layout.margin) / (bw + layout.gap);
+      const int row = (y - layout.contentTop - layout.margin) / (bh + layout.gap);
+      if (col < 3 && row < 2 && inRect(x, y, layout.margin + col * (bw + layout.gap),
+                                      layout.contentTop + layout.margin + row * (bh + layout.gap), bw, bh)) {
         const int index = row * 3 + col;
         return {kAgentKeys[index], static_cast<int8_t>(index), false, false, 0.0f};
       }
     }
   } else if (page == Page::Commands) {
-    if (x >= 5 && y >= 35) {
-      const int col = (x - 5) / 105;
-      const int row = (y - 35) / 87;
-      if (col < 3 && row < 2 && inRect(x, y, 5 + col * 105, 35 + row * 87, 100, 80)) {
+    const int bw = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
+    const int bh = (layout.contentBottom - layout.contentTop - 2 * layout.margin - layout.gap) / 2;
+    if (x >= layout.margin && y >= layout.contentTop + layout.margin) {
+      const int col = (x - layout.margin) / (bw + layout.gap);
+      const int row = (y - layout.contentTop - layout.margin) / (bh + layout.gap);
+      if (col < 3 && row < 2 && inRect(x, y, layout.margin + col * (bw + layout.gap),
+                                      layout.contentTop + layout.margin + row * (bh + layout.gap), bw, bh)) {
         const int index = row * 3 + col;
         return {kCommandKeys[index], -1, false, false, 0.0f};
       }
     }
   } else {
-    if (inRect(x, y, 18, 42, 70, 48)) return {nullptr, -1, false, true, 0.75f};
-    if (inRect(x, y, 18, 148, 70, 48)) return {nullptr, -1, false, true, 0.25f};
-    if (inRect(x, y, 2, 95, 70, 48)) return {nullptr, -1, false, true, 0.5f};
-    if (inRect(x, y, 76, 95, 70, 48)) return {nullptr, -1, false, true, 0.0f};
-    if (inRect(x, y, 166, 42, 68, 64)) return {"ENC_CC", -1, true, false, 0.0f};
-    if (inRect(x, y, 244, 42, 68, 64)) return {"ENC_CW", -1, true, false, 0.0f};
-    if (inRect(x, y, 166, 118, 146, 78)) return {"ENC", -1, false, false, 0.0f};
+    const int top = layout.contentTop + layout.margin;
+    const int ah = layout.contentBottom - top - layout.margin;
+    const int lw = (layout.width - 3 * layout.margin) * 46 / 100;
+    const int rx = 2 * layout.margin + lw;
+    const int rw = layout.width - rx - layout.margin;
+    const int dw = lw * 48 / 100;
+    const int dh = ah * 30 / 100;
+    const int cy = top + ah / 2;
+    const int ew = (rw - layout.gap) / 2;
+    const int eh = ah * 38 / 100;
+    if (inRect(x, y, layout.margin + dw / 2, top, dw, dh)) return {nullptr, -1, false, true, 0.75f};
+    if (inRect(x, y, layout.margin + dw / 2, top + ah - dh, dw, dh)) return {nullptr, -1, false, true, 0.25f};
+    if (inRect(x, y, layout.margin, cy - dh / 2, dw, dh)) return {nullptr, -1, false, true, 0.5f};
+    if (inRect(x, y, layout.margin + dw, cy - dh / 2, dw, dh)) return {nullptr, -1, false, true, 0.0f};
+    if (inRect(x, y, rx, top, ew, eh)) return {"ENC_CC", -1, true, false, 0.0f};
+    if (inRect(x, y, rx + ew + layout.gap, top, ew, eh)) return {"ENC_CW", -1, true, false, 0.0f};
+    if (inRect(x, y, rx, top + eh + layout.gap, rw, ah - eh - layout.gap)) return {"ENC", -1, false, false, 0.0f};
   }
   return {};
 }
@@ -256,26 +326,34 @@ void updateBattery() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("Codex Micro Core2 boot");
+  Serial.println(kBootMessage);
+  Serial.printf("Board profile: %s, firmware: %s\n", kBoardName, kFirmwareVersion);
 
   auto config = M5.config();
   config.clear_display = true;
   M5.begin(config);
-  M5.Display.setRotation(1);
-  M5.Display.setBrightness(120);
+  M5.Display.setRotation(kDisplayRotation);
+  M5.Display.setBrightness(kDisplayBrightness);
   M5.Display.setTextWrap(false);
+  updateLayout();
 
   canvas.setColorDepth(16);
   if (canvas.createSprite(M5.Display.width(), M5.Display.height()) == nullptr) {
     M5.Display.fillScreen(TFT_BLACK);
     M5.Display.setTextColor(TFT_RED);
     M5.Display.setTextDatum(middle_center);
-    M5.Display.drawString("Canvas allocation failed", 160, 120);
+    M5.Display.drawString("Canvas allocation failed", M5.Display.width() / 2,
+                          M5.Display.height() / 2);
     Serial.println("Canvas allocation failed");
     while (true) delay(1000);
   }
   canvas.setTextWrap(false);
 
+  canvas.fillScreen(kBackground);
+  drawCentered("STARTING BLE", layout.width / 2, layout.height / 2,
+               layout.textScale, kMuted);
+  canvas.pushSprite(0, 0);
+  Serial.println("Starting BLE (Tab5 uses the ESP32-C6 hosted controller)");
   codex.begin();
   state = codex.snapshot();
   updateBattery();
@@ -293,13 +371,13 @@ void loop() {
     releaseAction();
   }
 
-  if (M5.BtnA.wasPressed()) {
+  if (kHasPageButtons && M5.BtnA.wasPressed()) {
     page = Page::Tasks;
     drawScreen();
-  } else if (M5.BtnB.wasPressed()) {
+  } else if (kHasPageButtons && M5.BtnB.wasPressed()) {
     page = Page::Commands;
     drawScreen();
-  } else if (M5.BtnC.wasPressed()) {
+  } else if (kHasPageButtons && M5.BtnC.wasPressed()) {
     page = Page::Navigate;
     drawScreen();
   }

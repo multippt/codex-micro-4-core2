@@ -1,8 +1,8 @@
-# M5Stack Core2 Codex Micro
+# M5Stack Core2 / Tab5 Codex Micro
 
 [简体中文](README.zh-CN.md)
 
-An independent, open-source compatibility firmware that turns an M5Stack Core2
+An independent, open-source compatibility firmware that turns an M5Stack Core2 or Tab5
 into a Bluetooth controller for Codex Micro features in the ChatGPT desktop
 app.
 
@@ -24,9 +24,9 @@ remapping, and push-to-talk integration are handled by ChatGPT Desktop.
 - Four touchscreen directions for actions assigned to the analog stick
 - Dial counterclockwise, clockwise, press, and 500 ms hold behavior
 - ChatGPT Desktop command and direction remapping
-- Core2 battery reporting over BLE HID
+- Core2 or Tab5 battery reporting over BLE HID
 - Automatic BLE advertising after disconnection
-- Flicker-free 320 x 240 interface using a full-screen, PSRAM-backed `M5Canvas`
+- Responsive, flicker-free interface using a full-screen, PSRAM-backed `M5Canvas`
 
 This is a vendor-control surface, not a general-purpose Bluetooth keyboard.
 
@@ -34,7 +34,7 @@ This is a vendor-control surface, not a general-purpose Bluetooth keyboard.
 
 | Component | Supported or tested state |
 | --- | --- |
-| Hardware | M5Stack Core2 tested on physical hardware |
+| Hardware | M5Stack Core2 validated; M5Stack Tab5 build supported |
 | Host OS | macOS tested |
 | Host app | ChatGPT Desktop with Codex Micro support |
 | Transport | Bluetooth Low Energy HID only |
@@ -46,7 +46,7 @@ control, and Work Louder Input have not been validated.
 
 ## Requirements
 
-- M5Stack Core2
+- M5Stack Core2 or M5Stack Tab5
 - A data-capable USB-C cable for flashing
 - [PlatformIO Core](https://docs.platformio.org/en/latest/core/index.html) or
   the PlatformIO IDE extension
@@ -58,8 +58,12 @@ control, and Work Louder Input have not been validated.
 Clone the repository and run:
 
 ```sh
-pio run
-pio run --target upload
+pio run -e m5stack-core2
+pio run -e m5stack-core2 --target upload
+
+# Or, for Tab5:
+pio run -e m5stack-tab5
+pio run -e m5stack-tab5 --target upload
 pio device monitor
 ```
 
@@ -75,6 +79,8 @@ The normal application binary is generated at:
 
 ```text
 .pio/build/m5stack-core2/firmware.bin
+.pio/build/m5stack-tab5/firmware.bin
+.pio/build/m5stack-tab5/firmware.factory.bin
 ```
 
 ## Pair with ChatGPT Desktop
@@ -94,12 +100,12 @@ OpenAI's official Codex Micro usage documentation is available at
 [learn.chatgpt.com](https://learn.chatgpt.com/docs/features/codex-micro).
 Instructions specific to the original keyboard, including its USB mode,
 physical pairing control, lighting hardware, and extra layers, do not apply to
-this Core2 firmware.
+this firmware.
 
 ## Controls
 
-Core2's bottom A, B, and C touch buttons switch directly between the three
-pages.
+The bottom touchscreen tabs switch between the three pages. Core2's A, B, and C
+touch buttons provide additional shortcuts; Tab5 uses the on-screen tabs.
 
 ### Tasks page
 
@@ -137,14 +143,14 @@ default layout and do not change after host-side remapping.
 
 ```mermaid
 flowchart LR
-    Touch["Core2 touch input"] --> UI["Page and action mapping"]
+    Touch["Core2 / Tab5 touch input"] --> UI["Responsive page and action mapping"]
     UI --> Transport["Vendor JSON-RPC transport"]
     Transport --> HID["BLE HID report ID 6"]
     HID <--> Desktop["ChatGPT Desktop"]
     Desktop --> State["Task lighting and device requests"]
     State --> Canvas["M5Canvas framebuffer"]
-    Canvas --> LCD["320 x 240 display"]
-    Battery["Core2 power state"] --> Transport
+    Canvas --> LCD["320 x 240 or 1280 x 720 display"]
+    Battery["Board power state"] --> Transport
 ```
 
 See [docs/TECHNICAL.md](docs/TECHNICAL.md) for the HID descriptor, report
@@ -182,8 +188,17 @@ NOTICE.md                 Copyright, trademarks, and disclaimers
 ### Display shows `Canvas allocation failed`
 
 The full-screen 16-bit framebuffer could not be allocated. Restart the device.
-If it persists, verify that the target is an M5Stack Core2 with working PSRAM
-and that the unmodified `m5stack-core2` PlatformIO board definition is used.
+If it persists, verify that PSRAM is working and that the PlatformIO environment
+matches the connected board.
+
+### Tab5 remains on `STARTING BLE`
+
+Tab5's ESP32-P4 has no radio; BLE is provided by the onboard ESP32-C6 over
+SDIO. First power-cycle the Tab5 and retry with its factory C6 firmware. If the
+serial log reports `sdio_wrapper`, `H_SDIO_DRV`, or `ensure_slave_bus_ready`,
+update the C6 with the companion image shipped for the pinned Arduino-ESP32
+3.3.9 / ESP-Hosted release. Follow Espressif's
+[ESP-Hosted SDIO update guide](https://github.com/espressif/esp-hosted-mcu/blob/main/docs/sdio.md) and use its matching C6 image; keep a copy of the factory image and do not flash an unrelated C6 build. This repository intentionally does not redistribute a coprocessor binary.
 
 ### Serial diagnostics
 

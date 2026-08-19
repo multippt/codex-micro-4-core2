@@ -10,7 +10,7 @@ and compatibility behavior, not a stable or official API specification.
 
 The firmware has two main layers:
 
-1. `src/main.cpp` owns the Core2 display, touch hit testing, page state,
+1. `src/main.cpp` owns the board display, responsive touch hit testing, page state,
    battery polling, and render loop.
 2. `src/CodexMicroBle.cpp` owns BLE setup, the HID descriptor, report framing,
    JSON parsing, host request handling, and notifications sent to the host.
@@ -37,20 +37,21 @@ sequenceDiagram
 
 ## Build environment
 
-The PlatformIO environment is intentionally small:
+The two PlatformIO environments are intentionally pinned:
 
 | Setting | Value |
 | --- | --- |
-| Platform | `espressif32@6.13.0` |
-| Board | `m5stack-core2` |
+| Core2 platform / board | `espressif32@6.13.0` / `m5stack-core2` |
+| Tab5 platform / board | Pioarduino `55.03.39` / `m5stack-tab5-p4` |
 | Framework | Arduino |
 | Serial monitor | 115200 baud |
 | Upload speed | 1,500,000 baud |
-| Display and hardware library | `M5Unified ^0.2.7` |
-| JSON library | `ArduinoJson ^6.21.5` |
+| Display and hardware library | `M5Unified 0.2.10` |
+| JSON library | `ArduinoJson 6.21.5` |
 
-The current transport relies on the Arduino-ESP32 2.x BLE HID implementation
-provided by the selected PlatformIO platform. Upgrading the ESP32 platform can
+Core2 uses Arduino-ESP32 2.x Bluedroid. Tab5 uses Arduino-ESP32 3.3.9 NimBLE
+with its ESP32-C6 controller reached through ESP-Hosted over SDIO. Compile-time
+adapters cover callback and characteristic-value API differences. Upgrading either platform can
 change BLE field serialization, callback APIs, memory use, or pairing behavior
 and must be verified on a clean host pairing.
 
@@ -76,9 +77,9 @@ These names and identifiers are not assigned to this project. They are emitted
 only because the host uses them for compatibility detection. Do not reuse them
 for an unrelated product or imply that a device is official hardware.
 
-Arduino-ESP32 2.x serializes the PnP fields in a byte order that differs from
-the BLE PnP characteristic. The implementation pre-swaps the 16-bit VID, PID,
-and release values so macOS observes the intended values.
+The selected Arduino BLE implementations serialize the PnP fields in a byte
+order that differs from the BLE PnP characteristic. Both targets pre-swap the
+16-bit fields so macOS observes the intended values.
 
 ## HID report descriptor
 
@@ -152,7 +153,7 @@ Directional angles are normalized turns rather than radians:
 
 | Method | Behavior |
 | --- | --- |
-| `sys.version` | Returns firmware version `0.1.0-core2` |
+| `sys.version` | Returns `0.2.0-core2` or `0.2.0-tab5` |
 | `device.status` | Returns version, profile, layer, battery, and charging state |
 | `v.oai.thstatus` | Updates one or more of the six Agent status lights |
 | `v.oai.rgbcfg` | Stores host ambient and key lighting configuration |
@@ -180,10 +181,10 @@ is not rendered because Core2 has no equivalent per-key lighting hardware.
 
 ## Input mapping
 
-The display uses three pages. Page selection is available from the bottom tabs
-and from Core2's A, B, and C touch buttons.
+The display uses three pages. Page selection is available from the bottom tabs;
+Core2 also supports its A, B, and C touch-button shortcuts.
 
-Touch hit areas are fixed for the 320 x 240 landscape orientation. Press and
+Touch hit areas are derived from the active landscape display size. Press and
 release events are sent for Agent Keys, Command Keys, directional controls, and
 the dial press. Dial rotation controls send one encoder-step action immediately.
 
@@ -193,8 +194,9 @@ the gesture duration and click sequence.
 
 ## Display pipeline
 
-The UI is rendered in landscape orientation into a 320 x 240, 16-bit
-`M5Canvas`. The sprite is allocated after `M5.begin()` so display dimensions and
+The UI is rendered in landscape orientation into a full-screen, 16-bit
+`M5Canvas` (320 x 240 on Core2 and 1280 x 720 on Tab5). Geometry and typography
+are derived from the detected size. The sprite is allocated after `M5.begin()` so display dimensions and
 PSRAM are initialized. Each update performs:
 
 1. Clear the off-screen canvas.
@@ -210,7 +212,7 @@ screens redraw on input, connection changes, or host state changes.
 
 ## Battery and power
 
-The Core2 battery percentage and charging flag are sampled at startup and every
+The board battery percentage and charging flag are sampled at startup and every
 30 seconds. The percentage is clamped to 0 through 100. If the power API returns
 an invalid negative level, the firmware reports 100 percent as a compatibility
 fallback.

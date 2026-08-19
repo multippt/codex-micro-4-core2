@@ -1,8 +1,8 @@
-# M5Stack Core2 Codex Micro
+# M5Stack Core2 / Tab5 Codex Micro
 
 [English](README.md)
 
-这是一个独立开发的开源兼容固件，可将 M5Stack Core2 变成 ChatGPT 桌面端
+这是一个独立开发的开源兼容固件，可将 M5Stack Core2 或 Tab5 变成 ChatGPT 桌面端
 Codex Micro 功能的蓝牙控制器。
 
 固件将 Core2 模拟为 BLE Vendor HID 设备，并通过触摸屏提供 6 个 Agent Key、
@@ -21,9 +21,9 @@ Codex Micro 功能的蓝牙控制器。
 - 4 个触摸方向键，对应摇杆的四个方向
 - 旋钮逆时针、顺时针、按下和按住 500 ms 操作
 - 支持在 ChatGPT 桌面端重新映射命令键和方向动作
-- 通过 BLE HID 上报 Core2 电池状态
+- 通过 BLE HID 上报 Core2 或 Tab5 电池状态
 - 断开连接后自动重新广播
-- 使用 PSRAM 全屏 `M5Canvas` 双缓冲，实现无明显闪烁的 320 x 240 界面
+- 使用 PSRAM 全屏 `M5Canvas` 双缓冲，实现适配屏幕尺寸且无明显闪烁的界面
 
 本项目是 Codex 控制器，不是通用蓝牙键盘。
 
@@ -31,7 +31,7 @@ Codex Micro 功能的蓝牙控制器。
 
 | 项目 | 支持或测试状态 |
 | --- | --- |
-| 硬件 | 已在 M5Stack Core2 实机上测试 |
+| 硬件 | M5Stack Core2 已完成实机验证；支持构建 M5Stack Tab5 固件 |
 | 主机系统 | 已测试 macOS |
 | 主机应用 | 支持 Codex Micro 的 ChatGPT 桌面端 |
 | 通信方式 | 仅支持 Bluetooth Low Energy HID |
@@ -42,7 +42,7 @@ Codex Micro 功能的蓝牙控制器。
 
 ## 准备工作
 
-- M5Stack Core2
+- M5Stack Core2 或 M5Stack Tab5
 - 支持数据传输的 USB-C 线
 - [PlatformIO Core](https://docs.platformio.org/en/latest/core/index.html) 或
   PlatformIO IDE 扩展
@@ -54,8 +54,12 @@ Codex Micro 功能的蓝牙控制器。
 克隆仓库后执行：
 
 ```sh
-pio run
-pio run --target upload
+pio run -e m5stack-core2
+pio run -e m5stack-core2 --target upload
+
+# Tab5 使用：
+pio run -e m5stack-tab5
+pio run -e m5stack-tab5 --target upload
 pio device monitor
 ```
 
@@ -70,6 +74,8 @@ CODEX_MICRO_READY
 
 ```text
 .pio/build/m5stack-core2/firmware.bin
+.pio/build/m5stack-tab5/firmware.bin
+.pio/build/m5stack-tab5/firmware.factory.bin
 ```
 
 ## 与 ChatGPT 桌面端配对
@@ -90,7 +96,8 @@ USB 模式、物理配对控件、灯光硬件和额外层说明不适用于本 
 
 ## 操作说明
 
-Core2 底部的 A、B、C 触摸按钮可直接切换三个页面。
+屏幕底部标签可切换三个页面。Core2 还可使用 A、B、C 触摸按钮快捷切换；
+Tab5 使用屏幕标签。
 
 ### Tasks 页面
 
@@ -127,14 +134,14 @@ Mic 动作使用电脑麦克风。本固件不会采集或通过蓝牙传输 Cor
 
 ```mermaid
 flowchart LR
-    Touch["Core2 触摸输入"] --> UI["页面和动作映射"]
+    Touch["Core2 / Tab5 触摸输入"] --> UI["自适应页面和动作映射"]
     UI --> Transport["Vendor JSON-RPC 传输"]
     Transport --> HID["BLE HID Report ID 6"]
     HID <--> Desktop["ChatGPT 桌面端"]
     Desktop --> State["任务灯光和设备请求"]
     State --> Canvas["M5Canvas 帧缓冲"]
-    Canvas --> LCD["320 x 240 屏幕"]
-    Battery["Core2 电源状态"] --> Transport
+    Canvas --> LCD["320 x 240 或 1280 x 720 屏幕"]
+    Battery["设备电源状态"] --> Transport
 ```
 
 HID 描述符、报告分帧、RPC 方法、并发模型、渲染流程和协议限制详见
@@ -169,9 +176,17 @@ NOTICE.md                 版权、商标和免责声明
 
 ### 屏幕显示 `Canvas allocation failed`
 
-固件无法分配全屏 16 位帧缓冲。请先重启设备；如果问题持续出现，请确认目标
-硬件是带有可用 PSRAM 的 M5Stack Core2，并使用工程原有的 `m5stack-core2`
-PlatformIO 开发板定义。
+固件无法分配全屏 16 位帧缓冲。请先重启设备；如果问题持续出现，请确认 PSRAM
+正常，并确保 PlatformIO 环境与连接的开发板一致。
+
+### Tab5 停留在 `STARTING BLE`
+
+Tab5 的 ESP32-P4 本身没有无线电，BLE 由板载 ESP32-C6 通过 SDIO 提供。先将
+Tab5 完全断电后重试出厂 C6 固件。如果串口出现 `sdio_wrapper`、`H_SDIO_DRV`
+或 `ensure_slave_bus_ready`，请使用与本项目固定的 Arduino-ESP32 3.3.9 / ESP-Hosted
+版本匹配的 C6 镜像。按照 Espressif 的
+[ESP-Hosted SDIO 更新指南](https://github.com/espressif/esp-hosted-mcu/blob/main/docs/sdio.md)
+更新，并保留出厂镜像备份；不要烧录不匹配的 C6 固件。本仓库不分发协处理器镜像。
 
 ### 串口诊断
 

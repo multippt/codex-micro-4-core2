@@ -20,7 +20,7 @@ Louder, M5Stack, or any of their affiliates.
 
 OpenAI, ChatGPT, and Codex are trademarks or registered trademarks of OpenAI.
 Work Louder and Codex Micro product branding belong to their respective owners.
-M5Stack and Core2 are trademarks or product names of M5Stack. All other names
+M5Stack, Core2, and Tab5 are trademarks or product names of M5Stack. All other names
 and marks are the property of their respective owners.
 
 Names and marks are used only to identify compatibility and the intended use of
@@ -55,7 +55,7 @@ BLE pairing uses a "Just Works" flow without passkey authentication. Use the
 device only in a trusted environment and remove stale pairings from both the
 host and device when appropriate.
 
-This firmware does not connect directly to OpenAI and does not stream the Core2
+This firmware does not connect directly to OpenAI and does not stream the device
 microphone. It does send button events, directional actions, and device status
 to the paired computer. The paired operating system and ChatGPT Desktop control
 how those events, the computer microphone, and task data are processed. Review

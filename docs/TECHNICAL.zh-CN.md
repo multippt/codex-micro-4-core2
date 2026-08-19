@@ -9,7 +9,7 @@
 
 固件由两个主要层次组成：
 
-1. `src/main.cpp` 负责 Core2 屏幕、触摸区域检测、页面状态、电池轮询和渲染循环。
+1. `src/main.cpp` 负责设备屏幕、自适应触摸区域检测、页面状态、电池轮询和渲染循环。
 2. `src/CodexMicroBle.cpp` 负责 BLE 初始化、HID 描述符、报告分帧、JSON 解析、
    主机请求处理和向主机发送通知。
 
@@ -38,15 +38,16 @@ PlatformIO 环境保持精简并锁定关键版本：
 
 | 设置 | 值 |
 | --- | --- |
-| Platform | `espressif32@6.13.0` |
-| Board | `m5stack-core2` |
+| Core2 Platform / Board | `espressif32@6.13.0` / `m5stack-core2` |
+| Tab5 Platform / Board | Pioarduino `55.03.39` / `m5stack-tab5-p4` |
 | Framework | Arduino |
 | 串口监视器 | 115200 baud |
 | 烧录速度 | 1,500,000 baud |
-| 屏幕和硬件库 | `M5Unified ^0.2.7` |
-| JSON 库 | `ArduinoJson ^6.21.5` |
+| 屏幕和硬件库 | `M5Unified 0.2.10` |
+| JSON 库 | `ArduinoJson 6.21.5` |
 
-当前传输层依赖所选 PlatformIO 平台提供的 Arduino-ESP32 2.x BLE HID 实现。
+Core2 使用 Arduino-ESP32 2.x Bluedroid；Tab5 使用 Arduino-ESP32 3.3.9 NimBLE，
+通过 SDIO 上的 ESP-Hosted 访问 ESP32-C6 控制器。代码在编译期适配两套 BLE API。
 升级 ESP32 平台可能改变 BLE 字段序列化、回调 API、内存占用或配对行为，升级后
 必须在清除主机配对记录的情况下重新验证。
 
@@ -140,7 +141,7 @@ Agent ID 为 `AG00` 至 `AG05`。默认 Command ID 为 `ACT06`、`ACT07`、
 
 | Method | 行为 |
 | --- | --- |
-| `sys.version` | 返回固件版本 `0.1.0-core2` |
+| `sys.version` | 返回 `0.2.0-core2` 或 `0.2.0-tab5` |
 | `device.status` | 返回版本、Profile、Layer、电池和充电状态 |
 | `v.oai.thstatus` | 更新 6 个 Agent 状态灯中的一个或多个 |
 | `v.oai.rgbcfg` | 保存主机下发的环境灯光和按键灯光配置 |
@@ -169,7 +170,7 @@ Agent ID 为 `AG00` 至 `AG05`。默认 Command ID 为 `ACT06`、`ACT07`、
 
 屏幕包含三个页面。可以使用底部标签或 Core2 的 A、B、C 触摸按钮切换页面。
 
-触摸命中区域按 320 x 240 横屏方向固定。Agent Key、Command Key、方向控件和
+触摸命中区域根据当前横屏尺寸计算。Agent Key、Command Key、方向控件和
 旋钮按下都会发送按下与释放事件。旋钮旋转控件在触摸时立即发送一次步进动作。
 
 固件本地不计算双击间隔，也不判断打开设置所需的 500 ms 按住时间。固件发送
@@ -177,7 +178,8 @@ Agent ID 为 `AG00` 至 `AG05`。默认 Command ID 为 `ACT06`、`ACT07`、
 
 ## 屏幕渲染流程
 
-界面以横屏方向渲染到 320 x 240、16 位的 `M5Canvas`。Sprite 在 `M5.begin()`
+界面以横屏方向渲染到全屏 16 位 `M5Canvas`（Core2 为 320 x 240，Tab5 为
+1280 x 720），几何和文字大小由屏幕尺寸计算。Sprite 在 `M5.begin()`
 之后分配，确保屏幕尺寸和 PSRAM 已完成初始化。每次更新按以下顺序进行：
 
 1. 清空屏外 Canvas。
@@ -192,7 +194,7 @@ Agent ID 为 `AG00` 至 `AG05`。默认 Command ID 为 `ACT06`、`ACT07`、
 
 ## 电池与电源
 
-Core2 电池电量和充电标志在启动时读取，此后每 30 秒更新一次。电量限制在 0 到
+设备电池电量和充电标志在启动时读取，此后每 30 秒更新一次。电量限制在 0 到
 100 之间。如果电源 API 返回无效负数，固件以 100% 作为兼容性回退值。
 
 连接状态下会更新标准 BLE HID Battery Characteristic，`device.status` 同时返回
