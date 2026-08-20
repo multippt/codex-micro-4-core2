@@ -31,6 +31,9 @@ struct CodexMicroState {
   LightingSide ambient;
   LightingSide keys;
   bool connected = false;
+  bool secured = false;
+  bool ready = false;
+  String diagnostic;
   bool dirty = true;
 };
 
@@ -50,9 +53,14 @@ class CodexMicroBle {
 
  private:
   class ServerCallbacks;
+  class InputCallbacks;
   class OutputCallbacks;
+  friend class CodexSecurityCallbacks;
 
   void onConnected(bool connected);
+  void onSecurity(bool encrypted, bool authenticated, bool bonded, bool authorized);
+  void onSubscribed(uint16_t value);
+  void onNotifyStatus(int status, uint32_t code);
   void onOutput(const uint8_t* data, size_t length);
   void handleRpc(const JsonDocument& request);
   void sendResult(JsonVariantConst id, JsonVariantConst result);
@@ -68,6 +76,8 @@ class CodexMicroBle {
   SemaphoreHandle_t stateMutex_ = nullptr;
   CodexMicroState state_;
   String rpcBuffer_;
+  bool inputSubscribed_ = false;
+  bool outputSeen_ = false;
   uint8_t batteryPercentage_ = 100;
   bool charging_ = false;
   std::atomic<bool> clearingBonds_{false};

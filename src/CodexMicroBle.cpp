@@ -4,6 +4,7 @@
 #include "CodexMicroBle.h"
 
 #include <BLE2902.h>
+#include <BLEDescriptor.h>
 #include <BLEDevice.h>
 #include <BLESecurity.h>
 #include <BLEUtils.h>
@@ -44,8 +45,11 @@ const uint8_t kReportMap[] = {
     0xC0                     // End Collection
 };
 
-class SecurityCallbacks final : public BLESecurityCallbacks {
+}  // namespace
+
+class CodexSecurityCallbacks final : public BLESecurityCallbacks {
  public:
+  explicit CodexSecurityCallbacks(CodexMicroBle& owner) : owner_(owner) {}
   bool onSecurityRequest() override { return true; }
   uint32_t onPassKeyRequest() override { return 0; }
   void onPassKeyNotify(uint32_t) override {}
@@ -53,15 +57,23 @@ class SecurityCallbacks final : public BLESecurityCallbacks {
   #if defined(CONFIG_BLUEDROID_ENABLED)
   void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
     Serial.printf("BLE pairing %s\n", result.success ? "complete" : "failed");
+    owner_.onSecurity(result.success, result.success, result.success, result.success);
   }
   #elif defined(CONFIG_NIMBLE_ENABLED)
   void onAuthenticationComplete(ble_gap_conn_desc* result) override {
-    Serial.printf("BLE pairing %s\n", result != nullptr ? "complete" : "failed");
+    const bool encrypted = result != nullptr && result->sec_state.encrypted;
+    const bool authenticated = result != nullptr && result->sec_state.authenticated;
+    const bool bonded = result != nullptr && result->sec_state.bonded;
+    const bool authorized = result != nullptr && result->sec_state.authorize;
+    Serial.printf("BLE security encrypted=%u authenticated=%u bonded=%u authorized=%u\n",
+                  encrypted, authenticated, bonded, authorized);
+    owner_.onSecurity(encrypted, authenticated, bonded, authorized);
   }
   #endif
-};
 
-}  // namespace
+ private:
+  CodexMicroBle& owner_;
+};
 
 class CodexMicroBle::ServerCallbacks final : public BLEServerCallbacks {
  public:
@@ -69,12 +81,59 @@ class CodexMicroBle::ServerCallbacks final : public BLEServerCallbacks {
 
   void onConnect(BLEServer*) override { owner_.onConnected(true); }
 
+#if defined(CONFIG_NIMBLE_ENABLED)
+  void onConnect(BLEServer*, ble_gap_conn_desc* desc) override {
+    if (desc == nullptr) return;
+    Serial.printf("BLE GAP handle=%u interval=%u latency=%u timeout=%u\n",
+                  desc->conn_handle, desc->conn_itvl, desc->conn_latency,
+                  desc->supervision_timeout);
+    int rc = 0;
+    const bool started = BLESecurity::startSecurity(desc->conn_handle, &rc);
+    Serial.printf("BLE security start=%u rc=%d\n", started, rc);
+  }
+
+  void onDisconnect(BLEServer*, ble_gap_conn_desc* desc) override {
+    if (desc != nullptr) {
+      Serial.printf("BLE GAP disconnected handle=%u encrypted=%u bonded=%u\n",
+                    desc->conn_handle, desc->sec_state.encrypted,
+                    desc->sec_state.bonded);
+    }
+  }
+
+  void onMtuChanged(BLEServer*, ble_gap_conn_desc* desc, uint16_t mtu) override {
+    Serial.printf("BLE MTU handle=%u mtu=%u\n",
+                  desc == nullptr ? 0xffff : desc->conn_handle, mtu);
+  }
+#endif
+
   void onDisconnect(BLEServer*) override {
     owner_.onConnected(false);
     if (!owner_.clearingBonds_.load()) {
       BLEDevice::startAdvertising();
+      Serial.println("BLE advertising restarted after disconnect");
     }
   }
+
+ private:
+  CodexMicroBle& owner_;
+};
+
+class CodexMicroBle::InputCallbacks final : public BLECharacteristicCallbacks {
+ public:
+  explicit InputCallbacks(CodexMicroBle& owner) : owner_(owner) {}
+
+  void onStatus(BLECharacteristic*, Status status, uint32_t code) override {
+    owner_.onNotifyStatus(static_cast<int>(status), code);
+  }
+
+#if defined(CONFIG_NIMBLE_ENABLED)
+  void onSubscribe(BLECharacteristic*, ble_gap_conn_desc* desc,
+                   uint16_t value) override {
+    Serial.printf("BLE input subscription handle=%u value=%u\n",
+                  desc == nullptr ? 0xffff : desc->conn_handle, value);
+    owner_.onSubscribed(value);
+  }
+#endif
 
  private:
   CodexMicroBle& owner_;
@@ -86,6 +145,7 @@ class CodexMicroBle::OutputCallbacks final : public BLECharacteristicCallbacks {
 
   void onWrite(BLECharacteristic* characteristic) override {
     const auto value = characteristic->getValue();
+    Serial.printf("BLE output write bytes=%u\n", static_cast<unsigned>(value.length()));
     owner_.onOutput(reinterpret_cast<const uint8_t*>(value.c_str()), value.length());
   }
 
@@ -97,11 +157,16 @@ void CodexMicroBle::begin() {
   stateMutex_ = xSemaphoreCreateMutex();
 
   BLEDevice::init(kDeviceName);
-  BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
+  BLEDevice::setSecurityCallbacks(new CodexSecurityCallbacks(*this));
 
   auto* security = new BLESecurity();
   security->setCapability(ESP_IO_CAP_NONE);
   security->setAuthenticationMode(ESP_LE_AUTH_BOND);
+#if defined(CONFIG_NIMBLE_ENABLED)
+  security->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security->setForceAuthentication(true);
+#endif
 
   server_ = BLEDevice::createServer();
   server_->setCallbacks(new ServerCallbacks(*this));
@@ -115,8 +180,43 @@ void CodexMicroBle::begin() {
   hid_->hidInfo(0x00, 0x01);
   hid_->reportMap(const_cast<uint8_t*>(kReportMap), sizeof(kReportMap));
 
+#if defined(CONFIG_NIMBLE_ENABLED)
+  // Build the Tab5 report characteristics directly.  This lets us establish
+  // their concrete value lengths before the HID service is registered with
+  // NimBLE (and, through the C6 controller, exposed to Windows).
+  BLEService* hidService = hid_->hidService();
+  input_ = hidService->createCharacteristic(
+      BLEUUID(static_cast<uint16_t>(0x2A4D)),
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  output_ = hidService->createCharacteristic(
+      BLEUUID(static_cast<uint16_t>(0x2A4D)),
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_WRITE_NR);
+
+  auto* inputReference =
+      new BLEDescriptor(BLEUUID(static_cast<uint16_t>(0x2908)), 2);
+  const uint8_t inputReferenceValue[] = {kReportId, 0x01};
+  inputReference->setValue(inputReferenceValue, sizeof(inputReferenceValue));
+  input_->addDescriptor(inputReference);
+
+  auto* outputReference =
+      new BLEDescriptor(BLEUUID(static_cast<uint16_t>(0x2908)), 2);
+  const uint8_t outputReferenceValue[] = {kReportId, 0x02};
+  outputReference->setValue(outputReferenceValue, sizeof(outputReferenceValue));
+  output_->addDescriptor(outputReference);
+
+  // Windows' HID-over-GATT bridge validates WriteFile buffers against the
+  // registered Report characteristic value length. Seed both values before
+  // service registration so the GATT database and Windows HID collection
+  // agree from the first enumeration.
+  uint8_t emptyReport[kReportBodySize] = {};
+  input_->setValue(emptyReport, sizeof(emptyReport));
+  output_->setValue(emptyReport, sizeof(emptyReport));
+#else
   input_ = hid_->inputReport(kReportId);
   output_ = hid_->outputReport(kReportId);
+#endif
+  input_->setCallbacks(new InputCallbacks(*this));
   output_->setCallbacks(new OutputCallbacks(*this));
   hid_->startServices();
   hid_->setBatteryLevel(batteryPercentage_);
@@ -173,6 +273,7 @@ void CodexMicroBle::sendJoystick(float angle, float distance) {
 bool CodexMicroBle::clearBonds() {
   clearingBonds_ = true;
   BLEDevice::getAdvertising()->stop();
+  Serial.println("BLE advertising stopped for unpair");
   bool success = true;
 
   if (server_ != nullptr && connected()) {
@@ -216,11 +317,19 @@ bool CodexMicroBle::clearBonds() {
   if (ble_store_util_bonded_peers(peers, &count, MYNEWT_VAL(BLE_STORE_MAX_BONDS)) != 0) {
     success = false;
   } else {
+    Serial.printf("BLE bonds before clear=%d\n", count);
     for (int i = 0; i < count; ++i) {
       if (ble_store_util_delete_peer(&peers[i]) != 0) {
         success = false;
       }
     }
+    int remaining = 0;
+    if (ble_store_util_bonded_peers(peers, &remaining,
+                                    MYNEWT_VAL(BLE_STORE_MAX_BONDS)) != 0) {
+      success = false;
+    }
+    Serial.printf("BLE bonds after clear=%d\n", remaining);
+    success = success && remaining == 0;
   }
 #else
   success = false;
@@ -228,6 +337,7 @@ bool CodexMicroBle::clearBonds() {
 
   clearingBonds_ = false;
   BLEDevice::startAdvertising();
+  Serial.println("BLE advertising restarted after unpair");
   Serial.printf("BLE bonds clear %s\n", success ? "complete" : "failed");
   return success;
 }
@@ -257,13 +367,56 @@ CodexMicroState CodexMicroBle::snapshot() {
 void CodexMicroBle::onConnected(bool connected) {
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
   state_.connected = connected;
+  state_.secured = false;
+  state_.ready = false;
+  state_.diagnostic = connected ? "SECURING" : "";
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);
+  inputSubscribed_ = false;
+  outputSeen_ = false;
   rpcBuffer_.clear();
   Serial.printf("BLE host %s\n", connected ? "connected" : "disconnected");
 }
 
+void CodexMicroBle::onSecurity(bool encrypted, bool authenticated, bool bonded,
+                               bool authorized) {
+  const bool secured = encrypted && bonded;
+  xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  state_.secured = secured;
+  state_.ready = secured && inputSubscribed_ && outputSeen_;
+  state_.diagnostic = secured ? (state_.ready ? "" : "WAITING FOR CODEX")
+                              : "PAIRING FAILED";
+  state_.dirty = true;
+  xSemaphoreGive(stateMutex_);
+  if (!secured) {
+    Serial.printf("BLE pairing failed encrypted=%u authenticated=%u bonded=%u authorized=%u\n",
+                  encrypted, authenticated, bonded, authorized);
+  }
+}
+
+void CodexMicroBle::onSubscribed(uint16_t value) {
+  inputSubscribed_ = value != 0;
+  xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  state_.ready = state_.secured && inputSubscribed_ && outputSeen_;
+  state_.diagnostic = state_.ready ? "" :
+      (state_.secured ? "WAITING FOR CODEX" : "SECURING");
+  state_.dirty = true;
+  xSemaphoreGive(stateMutex_);
+}
+
+void CodexMicroBle::onNotifyStatus(int status, uint32_t code) {
+  Serial.printf("BLE input notify status=%d code=%lu\n", status,
+                static_cast<unsigned long>(code));
+}
+
 void CodexMicroBle::onOutput(const uint8_t* data, size_t length) {
+  outputSeen_ = true;
+  xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  state_.ready = state_.secured && inputSubscribed_;
+  state_.diagnostic = state_.ready ? "" :
+      (state_.secured ? "WAITING FOR SUBSCRIBE" : "SECURING");
+  state_.dirty = true;
+  xSemaphoreGive(stateMutex_);
   if (data == nullptr || length < 2) {
     return;
   }

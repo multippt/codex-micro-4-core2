@@ -105,21 +105,23 @@ void drawHeader() {
   canvas.setTextColor(kText);
   canvas.drawString("CODEX MICRO", layout.margin, layout.headerHeight / 2);
 
-  const uint16_t dot = state.connected ? 0x07E0 : 0xF800;
+  const uint16_t dot = state.ready ? 0x07E0 : (state.connected ? 0xFFE0 : 0xF800);
   const int dotX = layout.width - layout.margin - 95 * layout.textScale;
   canvas.fillCircle(dotX, layout.headerHeight / 2, 4 * layout.textScale, dot);
   canvas.setTextDatum(middle_right);
   canvas.setTextSize(layout.textScale);
   canvas.setTextColor(kMuted);
-  char status[20];
+  char status[24];
   if (unpairHolding) {
     const uint32_t elapsed = min<uint32_t>(kUnpairHoldMs, millis() - unpairHoldStartMs);
     snprintf(status, sizeof(status), "UNPAIR %lu%%",
              static_cast<unsigned long>(elapsed * 100 / kUnpairHoldMs));
   } else if (unpairTriggered) {
     snprintf(status, sizeof(status), "UNPAIRING");
+  } else if (state.diagnostic == "PAIRING FAILED") {
+    snprintf(status, sizeof(status), "PAIR FAILED");
   } else {
-    snprintf(status, sizeof(status), "%s", state.connected ? "LIVE" : "PAIR");
+    snprintf(status, sizeof(status), "%s", state.ready ? "LIVE" : "PAIR");
   }
   canvas.drawString(status, layout.width - layout.margin, layout.headerHeight / 2);
 
@@ -476,7 +478,9 @@ void loop() {
   }
 
   CodexMicroState latest = codex.snapshot();
-  if (latest.dirty || latest.connected != state.connected) {
+  if (latest.dirty || latest.connected != state.connected ||
+      latest.secured != state.secured || latest.ready != state.ready ||
+      latest.diagnostic != state.diagnostic) {
     state = latest;
     drawScreen();
   } else {
