@@ -153,9 +153,6 @@ void drawHeader() {
   canvas.setTextColor(kText);
   canvas.drawString("CODEX MICRO", layout.margin, layout.headerHeight / 2);
 
-  const uint16_t dot = state.ready ? 0x07E0 : (state.connected ? 0xFFE0 : 0xF800);
-  const int dotX = layout.width - layout.margin - 95 * layout.textScale;
-  canvas.fillCircle(dotX, layout.headerHeight / 2, 4 * layout.textScale, dot);
   canvas.setTextDatum(middle_right);
   canvas.setTextSize(layout.textScale);
   canvas.setTextColor(kMuted);
@@ -171,6 +168,10 @@ void drawHeader() {
   } else {
     snprintf(status, sizeof(status), "%s", state.ready ? "LIVE" : "PAIR");
   }
+  const uint16_t dot = state.ready ? 0x07E0 : (state.connected ? 0xFFE0 : 0xF800);
+  const int statusWidth = canvas.textWidth(status);
+  const int dotX = layout.width - layout.margin - statusWidth - 8 * layout.textScale;
+  canvas.fillCircle(dotX, layout.headerHeight / 2, 4 * layout.textScale, dot);
   canvas.drawString(status, layout.width - layout.margin, layout.headerHeight / 2);
 
   if (unpairHolding) {
@@ -243,18 +244,22 @@ Rect gridButtonRect(const Rect& bounds, int index, int columns = 3) {
 
 void drawButton(int x, int y, int width, int height, const char* label, uint16_t border,
                 bool pressed = false, const char* sublabel = nullptr,
-                bool spacious = false) {
+                bool spacious = false, int borderWidth = 1,
+                uint16_t labelColor = kText, uint16_t sublabelColor = kMuted) {
   canvas.fillRoundRect(x, y, width, height, 6, pressed ? kPanelPressed : kPanel);
-  canvas.drawRoundRect(x, y, width, height, 6, border);
+  for (int inset = 0; inset < borderWidth; ++inset) {
+    canvas.drawRoundRect(x + inset, y + inset, width - 2 * inset,
+                         height - 2 * inset, max(1, 6 - inset), border);
+  }
   const int labelY = spacious && sublabel ? y + height * 42 / 100
                                           : y + height / 2 - (sublabel ? 7 : 0);
   const int sublabelY = spacious ? y + height * 72 / 100
                                  : y + height / 2 + 13 * layout.textScale;
   drawCentered(label, x + width / 2, labelY,
-               (strlen(label) > 7 ? 1 : 2) * layout.textScale, kText);
+               (strlen(label) > 7 ? 1 : 2) * layout.textScale, labelColor);
   if (sublabel != nullptr) {
     drawCentered(sublabel, x + width / 2, sublabelY,
-                 layout.textScale, kMuted);
+                 layout.textScale, sublabelColor);
   }
 }
 
@@ -269,6 +274,9 @@ void drawTasks(const Rect& bounds, int columns = 3, bool spacious = false) {
     } else if (visualState == TaskVisualState::Error) {
       pulse = 0.35f + 0.65f * (std::sin(millis() * 0.012f) * 0.5f + 0.5f);
     }
+    const uint16_t baseColor = light.brightness <= 0.01f
+                                   ? 0x8410
+                                   : rgb888To565(light.color, light.brightness);
     const uint16_t color = light.brightness <= 0.01f
                                ? 0x4208
                                : rgb888To565(light.color, light.brightness * pulse);
@@ -277,7 +285,9 @@ void drawTasks(const Rect& bounds, int columns = 3, bool spacious = false) {
     const char* status = taskStatusLabel(visualState);
     const bool pressed = touchActive && activeAction.agent == i;
     drawButton(button.x, button.y, button.width, button.height, title, color,
-               pressed, status, spacious);
+               pressed, status, spacious, spacious ? 5 : 1,
+               spacious ? baseColor : kText,
+               spacious ? baseColor : kMuted);
     if (spacious) {
       canvas.fillCircle(button.x + 12 * layout.textScale,
                         button.y + button.height * 72 / 100,
@@ -304,7 +314,8 @@ void drawCommands(const Rect& bounds, int columns = 3, bool controlOrder = false
     const uint16_t border = i == 1 ? 0x07E0
                                    : (controlOrder && i == 2 ? 0xF9A6 : kAccent);
     drawButton(button.x, button.y, button.width, button.height,
-               kCommandLabels[i], border, pressed, hint, spacious);
+               kCommandLabels[i], border, pressed, hint, spacious,
+               spacious ? 2 : 1);
   }
 }
 
