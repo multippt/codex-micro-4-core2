@@ -586,6 +586,9 @@ void CodexMicroBle::updateThreadLighting(JsonArrayConst values) {
     light.brightness = value["b"] | light.brightness;
     light.effect = value["e"] | light.effect;
     light.speed = value["s"] | light.speed;
+    Serial.printf("BLE task light id=%d color=%06lX brightness=%.2f effect=%s speed=%.2f\n",
+                  id, static_cast<unsigned long>(light.color), light.brightness,
+                  light.effect.c_str(), light.speed);
   }
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);

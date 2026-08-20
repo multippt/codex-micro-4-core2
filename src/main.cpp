@@ -11,7 +11,7 @@
 
 namespace {
 
-enum class Page : uint8_t { Tasks, Commands, Navigate };
+enum class Page : uint8_t { Tasks, Commands, Control, Navigate };
 enum class UnpairNotice : uint8_t { None, Success, Failure };
 
 struct TouchAction {
@@ -50,14 +50,30 @@ struct Layout {
   int textScale;
 };
 
+struct Rect {
+  int x;
+  int y;
+  int width;
+  int height;
+};
+
+enum class TaskVisualState : uint8_t { Idle, Active, Waiting, Complete, Error };
+
 const char* kAgentKeys[] = {"AG00", "AG01", "AG02", "AG03", "AG04", "AG05"};
 const char* kCommandKeys[] = {"ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT12"};
 const char* kCommandLabels[] = {"FAST", "APPROVE", "DECLINE", "FORK", "MIC", "SEND"};
+#if defined(CODEX_BOARD_TAB5)
+constexpr uint8_t kControlCommandOrder[] = {0, 3, 1, 2, 4, 5};
+#endif
 
 CodexMicroBle codex;
 CodexMicroState state;
 M5Canvas canvas(&M5.Display);
+#if defined(CODEX_BOARD_TAB5)
+Page page = Page::Control;
+#else
 Page page = Page::Tasks;
+#endif
 TouchAction activeAction;
 bool touchActive = false;
 uint32_t lastDrawMs = 0;
@@ -89,6 +105,38 @@ uint16_t rgb888To565(uint32_t color, float brightness = 1.0f) {
   const uint8_t green = ((color >> 8) & 0xFF) * brightness;
   const uint8_t blue = (color & 0xFF) * brightness;
   return canvas.color565(red, green, blue);
+}
+
+TaskVisualState taskVisualState(const ThreadLight& light) {
+  if (light.brightness <= 0.01f) return TaskVisualState::Idle;
+  const uint8_t red = (light.color >> 16) & 0xFF;
+  const uint8_t green = (light.color >> 8) & 0xFF;
+  const uint8_t blue = light.color & 0xFF;
+  const uint8_t maximum = max(red, max(green, blue));
+  const uint8_t minimum = min(red, min(green, blue));
+  if (maximum - minimum < 40) return TaskVisualState::Idle;
+  if (red > 180 && red > green * 3 / 2 && red > blue * 6 / 5) {
+    return TaskVisualState::Error;
+  }
+  if (red > 160 && green > 100 && blue < 120) return TaskVisualState::Waiting;
+  if (green > red * 6 / 5 && green > blue * 6 / 5) {
+    return TaskVisualState::Complete;
+  }
+  if (blue > red * 6 / 5 && blue > green * 6 / 5) {
+    return TaskVisualState::Active;
+  }
+  return TaskVisualState::Idle;
+}
+
+const char* taskStatusLabel(TaskVisualState status) {
+  switch (status) {
+    case TaskVisualState::Active: return "ACTIVE";
+    case TaskVisualState::Waiting: return "WAITING";
+    case TaskVisualState::Complete: return "COMPLETE";
+    case TaskVisualState::Error: return "ERROR";
+    case TaskVisualState::Idle: return "IDLE";
+  }
+  return "IDLE";
 }
 
 void drawCentered(const char* text, int x, int y, int font = 1, uint16_t color = kText) {
@@ -155,11 +203,19 @@ void drawUnpairNotice() {
 }
 
 void drawTabs() {
+#if defined(CODEX_BOARD_TAB5)
+  const char* labels[] = {"CONTROL", "NAVIGATE"};
+  const Page pages[] = {Page::Control, Page::Navigate};
+  constexpr int tabCount = 2;
+#else
   const char* labels[] = {"TASKS", "COMMANDS", "NAVIGATE"};
-  for (int i = 0; i < 3; ++i) {
-    const int x = i * layout.width / 3;
-    const int width = (i + 1) * layout.width / 3 - x;
-    const bool selected = static_cast<int>(page) == i;
+  const Page pages[] = {Page::Tasks, Page::Commands, Page::Navigate};
+  constexpr int tabCount = 3;
+#endif
+  for (int i = 0; i < tabCount; ++i) {
+    const int x = i * layout.width / tabCount;
+    const int width = (i + 1) * layout.width / tabCount - x;
+    const bool selected = page == pages[i];
     canvas.fillRect(x, layout.contentBottom, width, layout.tabHeight,
                     selected ? kAccent : kPanel);
     drawCentered(labels[i], x + width / 2, layout.contentBottom + layout.tabHeight / 2,
@@ -168,60 +224,116 @@ void drawTabs() {
   }
 }
 
+Rect contentBounds() {
+  return {layout.margin, layout.contentTop + layout.margin,
+          layout.width - 2 * layout.margin,
+          layout.contentBottom - layout.contentTop - 2 * layout.margin};
+}
+
+Rect gridButtonRect(const Rect& bounds, int index, int columns = 3) {
+  const int rows = (6 + columns - 1) / columns;
+  const int row = index / columns;
+  const int col = index % columns;
+  const int buttonWidth = (bounds.width - (columns - 1) * layout.gap) / columns;
+  const int buttonHeight = (bounds.height - (rows - 1) * layout.gap) / rows;
+  return {bounds.x + col * (buttonWidth + layout.gap),
+          bounds.y + row * (buttonHeight + layout.gap),
+          buttonWidth, buttonHeight};
+}
+
 void drawButton(int x, int y, int width, int height, const char* label, uint16_t border,
-                bool pressed = false, const char* sublabel = nullptr) {
+                bool pressed = false, const char* sublabel = nullptr,
+                bool spacious = false) {
   canvas.fillRoundRect(x, y, width, height, 6, pressed ? kPanelPressed : kPanel);
   canvas.drawRoundRect(x, y, width, height, 6, border);
-  drawCentered(label, x + width / 2, y + height / 2 - (sublabel ? 7 : 0),
+  const int labelY = spacious && sublabel ? y + height * 42 / 100
+                                          : y + height / 2 - (sublabel ? 7 : 0);
+  const int sublabelY = spacious ? y + height * 72 / 100
+                                 : y + height / 2 + 13 * layout.textScale;
+  drawCentered(label, x + width / 2, labelY,
                (strlen(label) > 7 ? 1 : 2) * layout.textScale, kText);
   if (sublabel != nullptr) {
-    drawCentered(sublabel, x + width / 2, y + height / 2 + 13 * layout.textScale,
+    drawCentered(sublabel, x + width / 2, sublabelY,
                  layout.textScale, kMuted);
   }
 }
 
-void drawTasks() {
-  const int buttonWidth = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
-  const int buttonHeight = (layout.contentBottom - layout.contentTop -
-                            2 * layout.margin - layout.gap) / 2;
+void drawTasks(const Rect& bounds, int columns = 3, bool spacious = false) {
   for (int i = 0; i < 6; ++i) {
-    const int row = i / 3;
-    const int col = i % 3;
-    const int x = layout.margin + col * (buttonWidth + layout.gap);
-    const int y = layout.contentTop + layout.margin + row * (buttonHeight + layout.gap);
+    const Rect button = gridButtonRect(bounds, i, columns);
     const ThreadLight& light = state.threads[i];
+    const TaskVisualState visualState = taskVisualState(light);
     float pulse = 1.0f;
     if (light.effect == "breath") {
       pulse = 0.55f + 0.45f * (std::sin(millis() * 0.006f) * 0.5f + 0.5f);
+    } else if (visualState == TaskVisualState::Error) {
+      pulse = 0.35f + 0.65f * (std::sin(millis() * 0.012f) * 0.5f + 0.5f);
     }
     const uint16_t color = light.brightness <= 0.01f
                                ? 0x4208
                                : rgb888To565(light.color, light.brightness * pulse);
     char title[12];
     snprintf(title, sizeof(title), "AGENT %d", i + 1);
-    const char* status = light.brightness <= 0.01f ? "UNASSIGNED" : light.effect.c_str();
+    const char* status = taskStatusLabel(visualState);
     const bool pressed = touchActive && activeAction.agent == i;
-    drawButton(x, y, buttonWidth, buttonHeight, title, color, pressed, status);
-    canvas.fillCircle(x + buttonWidth - 12 * layout.textScale,
-                      y + 12 * layout.textScale, 4 * layout.textScale, color);
+    drawButton(button.x, button.y, button.width, button.height, title, color,
+               pressed, status, spacious);
+    if (spacious) {
+      canvas.fillCircle(button.x + 12 * layout.textScale,
+                        button.y + button.height * 72 / 100,
+                        3 * layout.textScale, color);
+    } else {
+      canvas.fillCircle(button.x + button.width - 12 * layout.textScale,
+                        button.y + 12 * layout.textScale,
+                        4 * layout.textScale, color);
+    }
   }
 }
 
-void drawCommands() {
-  const int buttonWidth = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
-  const int buttonHeight = (layout.contentBottom - layout.contentTop -
-                            2 * layout.margin - layout.gap) / 2;
-  for (int i = 0; i < 6; ++i) {
-    const int row = i / 3;
-    const int col = i % 3;
-    const int x = layout.margin + col * (buttonWidth + layout.gap);
-    const int y = layout.contentTop + layout.margin + row * (buttonHeight + layout.gap);
+void drawCommands(const Rect& bounds, int columns = 3, bool controlOrder = false,
+                  bool spacious = false) {
+  for (int position = 0; position < 6; ++position) {
+#if defined(CODEX_BOARD_TAB5)
+    const int i = controlOrder ? kControlCommandOrder[position] : position;
+#else
+    const int i = position;
+#endif
+    const Rect button = gridButtonRect(bounds, position, columns);
     const bool pressed = touchActive && activeAction.key == kCommandKeys[i];
     const char* hint = i == 4 ? "HOLD / 2X" : "TAP";
-    drawButton(x, y, buttonWidth, buttonHeight, kCommandLabels[i],
-               i == 1 ? 0x07E0 : kAccent, pressed, hint);
+    const uint16_t border = i == 1 ? 0x07E0
+                                   : (controlOrder && i == 2 ? 0xF9A6 : kAccent);
+    drawButton(button.x, button.y, button.width, button.height,
+               kCommandLabels[i], border, pressed, hint, spacious);
   }
 }
+
+#if defined(CODEX_BOARD_TAB5)
+void controlBounds(Rect& tasks, Rect& commands) {
+  const Rect content = contentBounds();
+  const int sectionTitleHeight = max(28, 18 * layout.textScale);
+  const int sectionWidth = (content.width - layout.gap) / 2;
+  tasks = {content.x, content.y + sectionTitleHeight, sectionWidth,
+           content.height - sectionTitleHeight};
+  commands = {content.x + sectionWidth + layout.gap,
+              content.y + sectionTitleHeight,
+              content.width - sectionWidth - layout.gap,
+              content.height - sectionTitleHeight};
+}
+
+void drawControl() {
+  Rect tasks;
+  Rect commands;
+  controlBounds(tasks, commands);
+  const int titleY = contentBounds().y + (tasks.y - contentBounds().y) / 2;
+  drawCentered("TASKS", tasks.x + tasks.width / 2, titleY,
+               layout.textScale, kMuted);
+  drawCentered("COMMANDS", commands.x + commands.width / 2, titleY,
+               layout.textScale, kMuted);
+  drawTasks(tasks, 2, true);
+  drawCommands(commands, 2, true, true);
+}
+#endif
 
 void drawNavigate() {
   const int top = layout.contentTop + layout.margin;
@@ -263,10 +375,15 @@ void drawScreen() {
   drawHeader();
   switch (page) {
     case Page::Tasks:
-      drawTasks();
+      drawTasks(contentBounds());
       break;
     case Page::Commands:
-      drawCommands();
+      drawCommands(contentBounds());
+      break;
+    case Page::Control:
+#if defined(CODEX_BOARD_TAB5)
+      drawControl();
+#endif
       break;
     case Page::Navigate:
       drawNavigate();
@@ -305,36 +422,46 @@ void finishUnpairHold() {
 
 TouchAction actionAt(int x, int y) {
   if (y >= layout.contentBottom) {
-    page = static_cast<Page>(min(2, x * 3 / layout.width));
+#if defined(CODEX_BOARD_TAB5)
+    page = x < layout.width / 2 ? Page::Control : Page::Navigate;
+#else
+    const Page pages[] = {Page::Tasks, Page::Commands, Page::Navigate};
+    page = pages[min(2, x * 3 / layout.width)];
+#endif
     drawScreen();
     return {};
   }
 
-  if (page == Page::Tasks) {
-    const int bw = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
-    const int bh = (layout.contentBottom - layout.contentTop - 2 * layout.margin - layout.gap) / 2;
-    if (x >= layout.margin && y >= layout.contentTop + layout.margin) {
-      const int col = (x - layout.margin) / (bw + layout.gap);
-      const int row = (y - layout.contentTop - layout.margin) / (bh + layout.gap);
-      if (col < 3 && row < 2 && inRect(x, y, layout.margin + col * (bw + layout.gap),
-                                      layout.contentTop + layout.margin + row * (bh + layout.gap), bw, bh)) {
-        const int index = row * 3 + col;
-        return {kAgentKeys[index], static_cast<int8_t>(index), false, false, 0.0f};
+  Rect taskBounds = contentBounds();
+  Rect commandBounds = contentBounds();
+#if defined(CODEX_BOARD_TAB5)
+  if (page == Page::Control) controlBounds(taskBounds, commandBounds);
+#endif
+  if (page == Page::Tasks || page == Page::Control) {
+    for (int i = 0; i < 6; ++i) {
+      const int columns = page == Page::Control ? 2 : 3;
+      const Rect button = gridButtonRect(taskBounds, i, columns);
+      if (inRect(x, y, button.x, button.y, button.width, button.height)) {
+        return {kAgentKeys[i], static_cast<int8_t>(i), false, false, 0.0f};
       }
     }
-  } else if (page == Page::Commands) {
-    const int bw = (layout.width - 2 * layout.margin - 2 * layout.gap) / 3;
-    const int bh = (layout.contentBottom - layout.contentTop - 2 * layout.margin - layout.gap) / 2;
-    if (x >= layout.margin && y >= layout.contentTop + layout.margin) {
-      const int col = (x - layout.margin) / (bw + layout.gap);
-      const int row = (y - layout.contentTop - layout.margin) / (bh + layout.gap);
-      if (col < 3 && row < 2 && inRect(x, y, layout.margin + col * (bw + layout.gap),
-                                      layout.contentTop + layout.margin + row * (bh + layout.gap), bw, bh)) {
-        const int index = row * 3 + col;
-        return {kCommandKeys[index], -1, false, false, 0.0f};
+  }
+  if (page == Page::Commands || page == Page::Control) {
+    for (int position = 0; position < 6; ++position) {
+      const int columns = page == Page::Control ? 2 : 3;
+      const Rect button = gridButtonRect(commandBounds, position, columns);
+      if (inRect(x, y, button.x, button.y, button.width, button.height)) {
+#if defined(CODEX_BOARD_TAB5)
+        const int i = page == Page::Control ? kControlCommandOrder[position]
+                                            : position;
+#else
+        const int i = position;
+#endif
+        return {kCommandKeys[i], -1, false, false, 0.0f};
       }
     }
-  } else {
+  }
+  if (page == Page::Navigate) {
     const int top = layout.contentTop + layout.margin;
     const int ah = layout.contentBottom - top - layout.margin;
     const int lw = (layout.width - 3 * layout.margin) * 46 / 100;
@@ -487,10 +614,11 @@ void loop() {
     state = latest;
   }
 
-  if (page == Page::Tasks && millis() - lastDrawMs > 80) {
+  if ((page == Page::Tasks || page == Page::Control) && millis() - lastDrawMs > 80) {
     bool animated = false;
     for (const ThreadLight& light : state.threads) {
-      animated = animated || light.effect == "breath";
+      animated = animated || light.effect == "breath" ||
+                 taskVisualState(light) == TaskVisualState::Error;
     }
     if (animated) drawScreen();
   }
