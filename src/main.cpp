@@ -8,6 +8,8 @@
 #endif
 
 #include <cmath>
+#include <algorithm>
+#include <array>
 
 #include "BoardProfile.h"
 #include "CodexMicroBle.h"
@@ -97,6 +99,11 @@ std::array<TaskVisualState, 6> previousTaskStates{};
 std::array<bool, 6> attentionAlerted{};
 int batteryLevel = -1;
 bool batteryCharging = false;
+bool batteryChargingInitialized = false;
+bool pendingCharging = false;
+uint8_t pendingChargingSamples = 0;
+int pendingBatteryLevel = -1;
+uint8_t pendingBatterySamples = 0;
 #endif
 
 constexpr uint32_t kUnpairHoldMs = 3000;
@@ -646,18 +653,75 @@ void releaseAction() {
 void updateBattery() {
   if (millis() - lastBatteryMs < 30000 && lastBatteryMs != 0) return;
   lastBatteryMs = millis();
+#if defined(CODEX_BOARD_TAB5)
+  // Tab5's M5Unified percentage is calculated from one INA226 read. A
+  // transient failed I2C transaction can therefore look like 0%, while an
+  // outlier clamps to 100%. Median sampling removes isolated failures.
+  std::array<int, 7> levels{};
+  size_t validLevelCount = 0;
+  for (size_t i = 0; i < levels.size(); ++i) {
+    const int level = M5.Power.getBatteryLevel();
+    if (level >= 0 && level <= 100) levels[validLevelCount++] = level;
+    delay(2);
+  }
+
+  int sampledLevel = -1;
+  int minimumLevel = -1;
+  int maximumLevel = -1;
+  if (validLevelCount >= 4) {
+    std::sort(levels.begin(), levels.begin() + validLevelCount);
+    minimumLevel = levels[0];
+    maximumLevel = levels[validLevelCount - 1];
+    sampledLevel = levels[validLevelCount / 2];
+  }
+
+  const bool sampledCharging = M5.Power.isCharging();
+  const bool previousCharging = batteryCharging;
+  if (!batteryChargingInitialized) {
+    batteryCharging = sampledCharging;
+    batteryChargingInitialized = true;
+  } else if (sampledCharging == batteryCharging) {
+    pendingChargingSamples = 0;
+  } else if (sampledCharging != pendingCharging) {
+    pendingCharging = sampledCharging;
+    pendingChargingSamples = 1;
+  } else if (++pendingChargingSamples >= 2) {
+    batteryCharging = sampledCharging;
+    pendingChargingSamples = 0;
+  }
+
+  const int previousLevel = batteryLevel;
+  if (sampledLevel < 0) {
+    pendingBatterySamples = 0;
+  } else if (batteryLevel < 0 || abs(sampledLevel - batteryLevel) <= 15) {
+    batteryLevel = sampledLevel;
+    pendingBatterySamples = 0;
+  } else if (pendingBatteryLevel < 0 ||
+             abs(sampledLevel - pendingBatteryLevel) > 3) {
+    pendingBatteryLevel = sampledLevel;
+    pendingBatterySamples = 1;
+  } else if (++pendingBatterySamples >= 3) {
+    batteryLevel = sampledLevel;
+    pendingBatterySamples = 0;
+  }
+  const bool changed = batteryLevel != previousLevel;
+  Serial.printf("Battery samples=%u range=%d..%d median=%d level=%d charging=%s%s\n",
+                static_cast<unsigned>(validLevelCount), minimumLevel,
+                maximumLevel, sampledLevel,
+                batteryLevel, batteryCharging ? "yes" : "no",
+                sampledLevel < 0 ? " retained" : "");
+  if ((changed || batteryCharging != previousCharging) &&
+      canvas.getBuffer() != nullptr) {
+    drawScreen();
+  }
+  if (batteryLevel >= 0) {
+    codex.setBattery(static_cast<uint8_t>(batteryLevel), batteryCharging);
+  }
+#else
   const int level = M5.Power.getBatteryLevel();
   const bool charging = M5.Power.isCharging();
-#if defined(CODEX_BOARD_TAB5)
-  const int normalizedLevel = level < 0 ? -1 : min(100, level);
-  const bool changed = normalizedLevel != batteryLevel || charging != batteryCharging;
-  batteryLevel = normalizedLevel;
-  batteryCharging = charging;
-  Serial.printf("Battery level=%d charging=%s\n", batteryLevel,
-                batteryCharging ? "yes" : "no");
-  if (changed && canvas.getBuffer() != nullptr) drawScreen();
-#endif
   codex.setBattery(level < 0 ? 100 : static_cast<uint8_t>(level), charging);
+#endif
 }
 
 }  // namespace
