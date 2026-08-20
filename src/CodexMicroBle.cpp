@@ -576,6 +576,7 @@ void CodexMicroBle::sendJson(const String& json) {
 
 void CodexMicroBle::updateThreadLighting(JsonArrayConst values) {
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  bool updated = false;
   for (JsonObjectConst value : values) {
     const int id = value["id"] | -1;
     if (id < 0 || id >= static_cast<int>(state_.threads.size())) {
@@ -586,10 +587,12 @@ void CodexMicroBle::updateThreadLighting(JsonArrayConst values) {
     light.brightness = value["b"] | light.brightness;
     light.effect = value["e"] | light.effect;
     light.speed = value["s"] | light.speed;
+    updated = true;
     Serial.printf("BLE task light id=%d color=%06lX brightness=%.2f effect=%s speed=%.2f\n",
                   id, static_cast<unsigned long>(light.color), light.brightness,
                   light.effect.c_str(), light.speed);
   }
+  if (updated) ++state_.threadRevision;
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);
 }

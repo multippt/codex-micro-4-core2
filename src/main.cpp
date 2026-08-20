@@ -3,6 +3,9 @@
 
 #include <Arduino.h>
 #include <M5Unified.h>
+#if defined(CODEX_BOARD_TAB5)
+#include <Preferences.h>
+#endif
 
 #include <cmath>
 
@@ -84,9 +87,25 @@ bool unpairTriggered = false;
 uint32_t unpairHoldStartMs = 0;
 uint32_t unpairNoticeUntilMs = 0;
 UnpairNotice unpairNotice = UnpairNotice::None;
+#if defined(CODEX_BOARD_TAB5)
+Preferences preferences;
+bool soundEnabled = true;
+bool speakerReady = false;
+bool threadStateInitialized = false;
+uint32_t lastThreadRevision = 0;
+std::array<TaskVisualState, 6> previousTaskStates{};
+std::array<bool, 6> attentionAlerted{};
+int batteryLevel = -1;
+bool batteryCharging = false;
+#endif
 
 constexpr uint32_t kUnpairHoldMs = 3000;
 constexpr uint32_t kUnpairNoticeMs = 5000;
+#if defined(CODEX_BOARD_TAB5)
+constexpr uint8_t kSpeakerVolume = 96;
+constexpr float kNotificationFrequency = 1000.0f;
+constexpr uint32_t kNotificationDurationMs = 90;
+#endif
 
 void updateLayout() {
   layout.width = M5.Display.width();
@@ -170,9 +189,53 @@ void drawHeader() {
   }
   const uint16_t dot = state.ready ? 0x07E0 : (state.connected ? 0xFFE0 : 0xF800);
   const int statusWidth = canvas.textWidth(status);
-  const int dotX = layout.width - layout.margin - statusWidth - 8 * layout.textScale;
+#if defined(CODEX_BOARD_TAB5)
+  const int pairRight = layout.width - layout.margin;
+  const int pairLeft = pairRight - max(150, statusWidth + 34 * layout.textScale);
+  const int dotX = pairRight - statusWidth - 8 * layout.textScale;
+#else
+  const int pairRight = layout.width - layout.margin;
+  const int pairLeft = layout.width * 2 / 3;
+  const int dotX = pairRight - statusWidth - 8 * layout.textScale;
+#endif
   canvas.fillCircle(dotX, layout.headerHeight / 2, 4 * layout.textScale, dot);
-  canvas.drawString(status, layout.width - layout.margin, layout.headerHeight / 2);
+  canvas.drawString(status, pairRight, layout.headerHeight / 2);
+
+#if defined(CODEX_BOARD_TAB5)
+  const int soundWidth = 150;
+  const int soundRight = pairLeft - layout.gap;
+  const int soundLeft = soundRight - soundWidth;
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(soundEnabled ? kText : kMuted);
+  canvas.drawString(soundEnabled ? "SOUND" : "MUTE",
+                    (soundLeft + soundRight) / 2, layout.headerHeight / 2);
+
+  const int batteryRight = soundLeft - 2 * layout.gap;
+  const int iconWidth = 50;
+  const int iconHeight = 24;
+  const int iconRight = batteryRight - 76;
+  const int iconLeft = iconRight - iconWidth;
+  const int iconTop = (layout.headerHeight - iconHeight) / 2;
+  canvas.drawRect(iconLeft, iconTop, iconWidth, iconHeight, kMuted);
+  canvas.fillRect(iconRight, iconTop + 7, 5, iconHeight - 14, kMuted);
+  if (batteryLevel >= 0) {
+    const int fillWidth = (iconWidth - 6) * min(100, batteryLevel) / 100;
+    const uint16_t batteryColor = batteryLevel <= 15 ? 0xF800
+                                    : (batteryCharging ? 0x07E0 : kAccent);
+    canvas.fillRect(iconLeft + 3, iconTop + 3, fillWidth, iconHeight - 6,
+                    batteryColor);
+  }
+  char batteryText[16];
+  if (batteryLevel < 0) {
+    snprintf(batteryText, sizeof(batteryText), "--%%");
+  } else {
+    snprintf(batteryText, sizeof(batteryText), "%d%%%s", batteryLevel,
+             batteryCharging ? "+" : "");
+  }
+  canvas.setTextDatum(middle_right);
+  canvas.setTextColor(kMuted);
+  canvas.drawString(batteryText, batteryRight, layout.headerHeight / 2);
+#endif
 
   if (unpairHolding) {
     const int barWidth = layout.width / 3;
@@ -411,8 +474,63 @@ bool inRect(int x, int y, int left, int top, int width, int height) {
 }
 
 bool isUnpairTarget(int x, int y) {
+#if defined(CODEX_BOARD_TAB5)
+  return y >= 0 && y < layout.headerHeight && x >= layout.width - layout.margin - 150;
+#else
   return y >= 0 && y < layout.headerHeight && x >= layout.width * 2 / 3;
+#endif
 }
+
+#if defined(CODEX_BOARD_TAB5)
+bool isSoundTarget(int x, int y) {
+  const int pairLeft = layout.width - layout.margin - 150;
+  const int soundRight = pairLeft - layout.gap;
+  return y >= 0 && y < layout.headerHeight &&
+         x >= soundRight - 150 && x < soundRight;
+}
+
+void toggleSound() {
+  soundEnabled = !soundEnabled;
+  preferences.begin("codex-micro", false);
+  preferences.putBool("sound", soundEnabled);
+  preferences.end();
+  Serial.printf("Speaker notifications %s\n", soundEnabled ? "enabled" : "muted");
+  drawScreen();
+}
+
+void processThreadNotifications(const CodexMicroState& latest) {
+  if (latest.threadRevision == lastThreadRevision) return;
+  bool notify = false;
+  std::array<TaskVisualState, 6> current{};
+  for (size_t i = 0; i < current.size(); ++i) {
+    current[i] = taskVisualState(latest.threads[i]);
+    if (!threadStateInitialized) {
+      attentionAlerted[i] = current[i] != TaskVisualState::Active;
+      continue;
+    }
+    if (current[i] == TaskVisualState::Active) {
+      attentionAlerted[i] = false;
+    } else if (current[i] != previousTaskStates[i] && !attentionAlerted[i]) {
+      attentionAlerted[i] = true;
+      notify = true;
+    }
+  }
+  previousTaskStates = current;
+  lastThreadRevision = latest.threadRevision;
+  if (!threadStateInitialized) {
+    threadStateInitialized = true;
+    Serial.println("Agent notification baseline synchronized");
+    return;
+  }
+  if (notify) {
+    Serial.printf("Agent attention transition notification (%s)\n",
+                  soundEnabled ? "beep" : "muted");
+    if (soundEnabled && speakerReady) {
+      M5.Speaker.tone(kNotificationFrequency, kNotificationDurationMs);
+    }
+  }
+}
+#endif
 
 void startUnpairHold() {
   unpairHolding = true;
@@ -526,6 +644,15 @@ void updateBattery() {
   lastBatteryMs = millis();
   const int level = M5.Power.getBatteryLevel();
   const bool charging = M5.Power.isCharging();
+#if defined(CODEX_BOARD_TAB5)
+  const int normalizedLevel = level < 0 ? -1 : min(100, level);
+  const bool changed = normalizedLevel != batteryLevel || charging != batteryCharging;
+  batteryLevel = normalizedLevel;
+  batteryCharging = charging;
+  Serial.printf("Battery level=%d charging=%s\n", batteryLevel,
+                batteryCharging ? "yes" : "no");
+  if (changed && canvas.getBuffer() != nullptr) drawScreen();
+#endif
   codex.setBattery(level < 0 ? 100 : static_cast<uint8_t>(level), charging);
 }
 
@@ -540,6 +667,16 @@ void setup() {
   auto config = M5.config();
   config.clear_display = true;
   M5.begin(config);
+#if defined(CODEX_BOARD_TAB5)
+  preferences.begin("codex-micro", true);
+  soundEnabled = preferences.getBool("sound", true);
+  preferences.end();
+  speakerReady = M5.Speaker.begin();
+  if (speakerReady) M5.Speaker.setVolume(kSpeakerVolume);
+  Serial.printf("Tab5 speaker initialization %s, notifications %s\n",
+                speakerReady ? "complete" : "failed",
+                soundEnabled ? "enabled" : "muted");
+#endif
   M5.Display.setRotation(kDisplayRotation);
   M5.Display.setBrightness(kDisplayBrightness);
   M5.Display.setTextWrap(false);
@@ -575,6 +712,10 @@ void loop() {
   if (touch.wasPressed()) {
     if (!unpairTriggered && isUnpairTarget(touch.x, touch.y)) {
       startUnpairHold();
+#if defined(CODEX_BOARD_TAB5)
+    } else if (!unpairTriggered && isSoundTarget(touch.x, touch.y)) {
+      toggleSound();
+#endif
     } else if (!unpairTriggered) {
       pressAction(actionAt(touch.x, touch.y));
     }
@@ -616,6 +757,12 @@ void loop() {
   }
 
   CodexMicroState latest = codex.snapshot();
+#if defined(CODEX_BOARD_TAB5)
+  if (latest.connected != state.connected) {
+    threadStateInitialized = false;
+  }
+  processThreadNotifications(latest);
+#endif
   if (latest.dirty || latest.connected != state.connected ||
       latest.secured != state.secured || latest.ready != state.ready ||
       latest.diagnostic != state.diagnostic) {

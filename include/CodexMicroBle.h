@@ -33,6 +33,7 @@ struct CodexMicroState {
   bool connected = false;
   bool secured = false;
   bool ready = false;
+  uint32_t threadRevision = 0;
   String diagnostic;
   bool dirty = true;
 };
