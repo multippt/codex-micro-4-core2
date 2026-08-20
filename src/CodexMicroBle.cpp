@@ -224,6 +224,10 @@ void CodexMicroBle::begin() {
   input_->setCallbacks(new InputCallbacks(*this));
   output_->setCallbacks(new OutputCallbacks(*this));
   hid_->startServices();
+  Serial.printf("BLE reports input_handle=%u output_handle=%u input_len=%u output_len=%u\n",
+                input_->getHandle(), output_->getHandle(),
+                static_cast<unsigned>(input_->getLength()),
+                static_cast<unsigned>(output_->getLength()));
   hid_->setBatteryLevel(batteryPercentage_);
 
   BLEAdvertising* advertising = BLEDevice::getAdvertising();
