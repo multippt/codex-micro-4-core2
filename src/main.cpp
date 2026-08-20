@@ -82,6 +82,9 @@ Page page = Page::Tasks;
 TouchAction activeAction;
 bool touchActive = false;
 uint32_t lastDrawMs = 0;
+#if defined(CODEX_BOARD_TAB5)
+bool drawPending = false;
+#endif
 uint32_t lastBatteryMs = 0;
 Layout layout{};
 bool unpairHolding = false;
@@ -478,6 +481,17 @@ void drawScreen() {
   drawUnpairNotice();
   canvas.pushSprite(0, 0);
   lastDrawMs = millis();
+#if defined(CODEX_BOARD_TAB5)
+  drawPending = false;
+#endif
+}
+
+void requestDraw() {
+#if defined(CODEX_BOARD_TAB5)
+  drawPending = true;
+#else
+  drawScreen();
+#endif
 }
 
 bool inRect(int x, int y, int left, int top, int width, int height) {
@@ -506,7 +520,7 @@ void toggleSound() {
   preferences.putBool("sound", soundEnabled);
   preferences.end();
   Serial.printf("Speaker notifications %s\n", soundEnabled ? "enabled" : "muted");
-  drawScreen();
+  requestDraw();
 }
 
 void processThreadNotifications(const CodexMicroState& latest) {
@@ -547,7 +561,7 @@ void startUnpairHold() {
   unpairHolding = true;
   unpairTriggered = false;
   unpairHoldStartMs = millis();
-  drawScreen();
+  requestDraw();
 }
 
 void finishUnpairHold() {
@@ -635,7 +649,7 @@ void pressAction(const TouchAction& action) {
   } else {
     codex.sendKey(action.key, 1, action.agent);
   }
-  drawScreen();
+  requestDraw();
 }
 
 void releaseAction() {
@@ -647,7 +661,7 @@ void releaseAction() {
   }
   touchActive = false;
   activeAction = {};
-  drawScreen();
+  requestDraw();
 }
 
 void updateBattery() {
@@ -838,7 +852,7 @@ void loop() {
       latest.secured != state.secured || latest.ready != state.ready ||
       latest.diagnostic != state.diagnostic) {
     state = latest;
-    drawScreen();
+    requestDraw();
   } else {
     state = latest;
   }
@@ -851,6 +865,10 @@ void loop() {
     }
     if (animated) drawScreen();
   }
+
+#if defined(CODEX_BOARD_TAB5)
+  if (drawPending && millis() - lastDrawMs >= 24) drawScreen();
+#endif
 
   updateBattery();
   delay(8);
