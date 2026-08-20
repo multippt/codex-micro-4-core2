@@ -185,7 +185,11 @@ void drawHeader() {
   } else if (state.diagnostic == "PAIRING FAILED") {
     snprintf(status, sizeof(status), "PAIR FAILED");
   } else {
+#if defined(CODEX_BOARD_TAB5)
+    snprintf(status, sizeof(status), "%s", state.ready ? "LINK" : "PAIR");
+#else
     snprintf(status, sizeof(status), "%s", state.ready ? "LIVE" : "PAIR");
+#endif
   }
   const uint16_t dot = state.ready ? 0x07E0 : (state.connected ? 0xFFE0 : 0xF800);
   const int statusWidth = canvas.textWidth(status);
@@ -708,6 +712,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  codex.maintain();
   const auto touch = M5.Touch.getDetail();
   if (touch.wasPressed()) {
     if (!unpairTriggered && isUnpairTarget(touch.x, touch.y)) {

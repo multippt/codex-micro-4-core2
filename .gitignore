@@ -4,3 +4,4 @@
 /src/idf_component.yml
 .vscode/
 .DS_Store
+.diagnostics

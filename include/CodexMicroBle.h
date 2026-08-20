@@ -48,6 +48,7 @@ class CodexMicroBle {
   void setBattery(uint8_t percentage, bool charging);
   void sendKey(const char* key, uint8_t action, int8_t agent = -1);
   void sendJoystick(float angle, float distance);
+  void maintain();
   bool clearBonds();
   bool connected();
   CodexMicroState snapshot();
@@ -78,7 +79,15 @@ class CodexMicroBle {
   CodexMicroState state_;
   String rpcBuffer_;
   bool inputSubscribed_ = false;
-  bool outputSeen_ = false;
+  std::atomic<bool> outputSeen_{false};
+  std::atomic<uint32_t> lastValidRpcMs_{0};
+  std::atomic<uint32_t> lastResponseMs_{0};
+  std::atomic<uint32_t> notifySuccessCount_{0};
+  std::atomic<uint32_t> notifyFailureCount_{0};
+  std::atomic<uint8_t> recoveryReason_{0};
+  std::atomic<bool> staleDisconnectStarted_{false};
+  uint8_t initializationMethods_ = 0;
+  uint32_t initializationRetries_ = 0;
   uint8_t batteryPercentage_ = 100;
   bool charging_ = false;
   std::atomic<bool> clearingBonds_{false};
