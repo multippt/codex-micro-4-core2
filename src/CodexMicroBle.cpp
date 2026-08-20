@@ -187,22 +187,27 @@ void CodexMicroBle::begin() {
   BLEService* hidService = hid_->hidService();
   input_ = hidService->createCharacteristic(
       BLEUUID(static_cast<uint16_t>(0x2A4D)),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_READ_ENC |
+          BLECharacteristic::PROPERTY_NOTIFY);
   output_ = hidService->createCharacteristic(
       BLEUUID(static_cast<uint16_t>(0x2A4D)),
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
-          BLECharacteristic::PROPERTY_WRITE_NR);
+          BLECharacteristic::PROPERTY_WRITE_NR |
+          BLECharacteristic::PROPERTY_READ_ENC |
+          BLECharacteristic::PROPERTY_WRITE_ENC);
 
   auto* inputReference =
       new BLEDescriptor(BLEUUID(static_cast<uint16_t>(0x2908)), 2);
   const uint8_t inputReferenceValue[] = {kReportId, 0x01};
   inputReference->setValue(inputReferenceValue, sizeof(inputReferenceValue));
+  inputReference->setAccessPermissions(ESP_GATT_PERM_READ);
   input_->addDescriptor(inputReference);
 
   auto* outputReference =
       new BLEDescriptor(BLEUUID(static_cast<uint16_t>(0x2908)), 2);
   const uint8_t outputReferenceValue[] = {kReportId, 0x02};
   outputReference->setValue(outputReferenceValue, sizeof(outputReferenceValue));
+  outputReference->setAccessPermissions(ESP_GATT_PERM_READ);
   output_->addDescriptor(outputReference);
 
   // Windows' HID-over-GATT bridge validates WriteFile buffers against the
