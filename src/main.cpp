@@ -661,7 +661,9 @@ void updateBattery() {
   size_t validLevelCount = 0;
   for (size_t i = 0; i < levels.size(); ++i) {
     const int level = M5.Power.getBatteryLevel();
-    if (level >= 0 && level <= 100) levels[validLevelCount++] = level;
+    // On a powered Tab5, an exact zero is the INA226 failure/clamp observed
+    // in M5Unified rather than a useful remaining-capacity measurement.
+    if (level > 0 && level <= 100) levels[validLevelCount++] = level;
     delay(2);
   }
 

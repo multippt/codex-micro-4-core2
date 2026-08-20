@@ -22,10 +22,6 @@ constexpr char kManufacturer[] = "Work Louder";
 constexpr size_t kPayloadSize = 61;
 constexpr size_t kReportBodySize = 63;
 #if defined(CODEX_BOARD_TAB5)
-constexpr uint32_t kStaleCodexTimeoutMs = 120000;
-constexpr uint8_t kRecoverySubscriptionLost = 1;
-constexpr uint8_t kRecoveryNotifyFailure = 2;
-constexpr uint8_t kRecoveryStaleRpc = 3;
 constexpr uint8_t kInitializationCompleteMask = 0x0F;
 #endif
 
@@ -162,6 +158,12 @@ class CodexMicroBle::OutputCallbacks final : public BLECharacteristicCallbacks {
 
 void CodexMicroBle::begin() {
   stateMutex_ = xSemaphoreCreateMutex();
+#if defined(CODEX_BOARD_TAB5)
+  responseQueue_ = xQueueCreate(8, sizeof(PendingMessage));
+  if (responseQueue_ == nullptr) {
+    Serial.println("BLE response queue allocation failed");
+  }
+#endif
 
   BLEDevice::init(kDeviceName);
   BLEDevice::setSecurityCallbacks(new CodexSecurityCallbacks(*this));
@@ -288,42 +290,10 @@ void CodexMicroBle::sendJoystick(float angle, float distance) {
 
 void CodexMicroBle::maintain() {
 #if defined(CODEX_BOARD_TAB5)
-  const uint32_t lastValidRpc = lastValidRpcMs_.load();
-  if (server_ == nullptr || staleDisconnectStarted_.load()) return;
-
-  bool shouldRecover = false;
-  uint32_t age = 0;
-  uint8_t reason = recoveryReason_.load();
-  xSemaphoreTake(stateMutex_, portMAX_DELAY);
-  if (state_.connected && reason != 0) {
-    shouldRecover = true;
-  } else if (state_.connected && state_.ready && lastValidRpc != 0) {
-    age = millis() - lastValidRpc;
-    if (age >= kStaleCodexTimeoutMs) {
-      state_.ready = false;
-      state_.diagnostic = "STALE CODEX";
-      state_.dirty = true;
-      reason = kRecoveryStaleRpc;
-      recoveryReason_.store(reason);
-      shouldRecover = true;
-    }
-  }
-  if (shouldRecover) {
-    state_.ready = false;
-    state_.diagnostic = reason == kRecoverySubscriptionLost ? "LINK LOST"
-                        : (reason == kRecoveryNotifyFailure ? "NOTIFY FAILED"
-                                                           : "STALE CODEX");
-    state_.dirty = true;
-    staleDisconnectStarted_.store(true);
-  }
-  xSemaphoreGive(stateMutex_);
-
-  if (shouldRecover) {
-    Serial.printf("BLE recovery reason=%u rpc_age_ms=%lu notify_ok=%lu notify_fail=%lu\n",
-                  reason, static_cast<unsigned long>(age),
-                  static_cast<unsigned long>(notifySuccessCount_.load()),
-                  static_cast<unsigned long>(notifyFailureCount_.load()));
-    server_->disconnect(server_->getConnId());
+  if (responseQueue_ == nullptr) return;
+  PendingMessage pending;
+  if (xQueueReceive(responseQueue_, &pending, 0) == pdTRUE) {
+    transmitJson(pending.data, pending.length);
   }
 #endif
 }
@@ -436,10 +406,11 @@ void CodexMicroBle::onConnected(bool connected) {
   lastResponseMs_.store(0);
   notifySuccessCount_.store(0);
   notifyFailureCount_.store(0);
-  recoveryReason_.store(0);
-  staleDisconnectStarted_.store(false);
   initializationMethods_ = 0;
   initializationRetries_ = 0;
+#if defined(CODEX_BOARD_TAB5)
+  if (responseQueue_ != nullptr) xQueueReset(responseQueue_);
+#endif
   rpcBuffer_.clear();
   Serial.printf("BLE host %s\n", connected ? "connected" : "disconnected");
 }
@@ -462,12 +433,6 @@ void CodexMicroBle::onSecurity(bool encrypted, bool authenticated, bool bonded,
 
 void CodexMicroBle::onSubscribed(uint16_t value) {
   inputSubscribed_ = value != 0;
-#if defined(CODEX_BOARD_TAB5)
-  if (value == 0 && outputSeen_.load()) {
-    recoveryReason_.store(kRecoverySubscriptionLost);
-    Serial.println("BLE input subscription removed; recovery requested");
-  }
-#endif
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
   state_.ready = state_.secured && inputSubscribed_ && outputSeen_.load();
   state_.diagnostic = state_.ready ? "" :
@@ -484,8 +449,7 @@ void CodexMicroBle::onNotifyStatus(int status, uint32_t code) {
     notifySuccessCount_.fetch_add(1);
   } else {
     notifyFailureCount_.fetch_add(1);
-    recoveryReason_.store(kRecoveryNotifyFailure);
-    Serial.println("BLE input notification failure; recovery requested");
+    Serial.println("BLE input notification failure");
   }
 #endif
 }
@@ -648,6 +612,31 @@ void CodexMicroBle::sendSuccess(JsonVariantConst id) {
 }
 
 void CodexMicroBle::sendJson(const String& json) {
+#if defined(CODEX_BOARD_TAB5)
+  if (responseQueue_ == nullptr || json.length() >= kPendingMessageCapacity) {
+    notifyFailureCount_.fetch_add(1);
+    Serial.printf("BLE response queue unavailable/oversize bytes=%u\n",
+                  static_cast<unsigned>(json.length()));
+    return;
+  }
+  PendingMessage pending;
+  pending.length = static_cast<uint16_t>(json.length());
+  memcpy(pending.data, json.c_str(), pending.length);
+  if (xQueueSend(responseQueue_, &pending, 0) != pdTRUE) {
+    notifyFailureCount_.fetch_add(1);
+    Serial.printf("BLE response queue full bytes=%u\n",
+                  static_cast<unsigned>(json.length()));
+  } else {
+    Serial.printf("BLE response queued bytes=%u depth=%u\n",
+                  static_cast<unsigned>(json.length()),
+                  static_cast<unsigned>(uxQueueMessagesWaiting(responseQueue_)));
+  }
+#else
+  transmitJson(json.c_str(), json.length());
+#endif
+}
+
+void CodexMicroBle::transmitJson(const char* json, size_t length) {
   if (input_ == nullptr) {
     return;
   }
@@ -655,27 +644,27 @@ void CodexMicroBle::sendJson(const String& json) {
     return;
   }
 
-  String framed = json;
-  framed += '\n';
   size_t offset = 0;
-  while (offset < framed.length()) {
-    const size_t chunk = min<size_t>(kPayloadSize, framed.length() - offset);
+  const size_t framedLength = length + 1;
+  while (offset < framedLength) {
+    const size_t chunk = min<size_t>(kPayloadSize, framedLength - offset);
     uint8_t report[kReportBodySize] = {};
     report[0] = 2;
     report[1] = chunk;
-    memcpy(report + 2, framed.c_str() + offset, chunk);
+    for (size_t i = 0; i < chunk; ++i) {
+      const size_t sourceOffset = offset + i;
+      report[2 + i] = sourceOffset < length
+                          ? static_cast<uint8_t>(json[sourceOffset])
+                          : static_cast<uint8_t>('\n');
+    }
     input_->setValue(report, sizeof(report));
     input_->notify();
     offset += chunk;
-#if defined(CODEX_BOARD_TAB5)
-    delay(12);
-#else
     delay(4);
-#endif
   }
   lastResponseMs_.store(millis());
   Serial.printf("BLE RPC response bytes=%u notify_ok=%lu notify_fail=%lu\n",
-                static_cast<unsigned>(framed.length()),
+                static_cast<unsigned>(framedLength),
                 static_cast<unsigned long>(notifySuccessCount_.load()),
                 static_cast<unsigned long>(notifyFailureCount_.load()));
 }

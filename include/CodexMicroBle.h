@@ -8,6 +8,7 @@
 #include <BLECharacteristic.h>
 #include <BLEHIDDevice.h>
 #include <BLEServer.h>
+#include <freertos/queue.h>
 
 #include <array>
 #include <atomic>
@@ -68,6 +69,7 @@ class CodexMicroBle {
   void sendResult(JsonVariantConst id, JsonVariantConst result);
   void sendSuccess(JsonVariantConst id);
   void sendJson(const String& json);
+  void transmitJson(const char* json, size_t length);
   void updateThreadLighting(JsonArrayConst values);
   void updateLightingSide(LightingSide& side, JsonObjectConst value);
 
@@ -76,6 +78,14 @@ class CodexMicroBle {
   BLECharacteristic* input_ = nullptr;
   BLECharacteristic* output_ = nullptr;
   SemaphoreHandle_t stateMutex_ = nullptr;
+#if defined(CODEX_BOARD_TAB5)
+  static constexpr size_t kPendingMessageCapacity = 768;
+  struct PendingMessage {
+    uint16_t length = 0;
+    char data[kPendingMessageCapacity] = {};
+  };
+  QueueHandle_t responseQueue_ = nullptr;
+#endif
   CodexMicroState state_;
   String rpcBuffer_;
   bool inputSubscribed_ = false;
@@ -84,8 +94,6 @@ class CodexMicroBle {
   std::atomic<uint32_t> lastResponseMs_{0};
   std::atomic<uint32_t> notifySuccessCount_{0};
   std::atomic<uint32_t> notifyFailureCount_{0};
-  std::atomic<uint8_t> recoveryReason_{0};
-  std::atomic<bool> staleDisconnectStarted_{false};
   uint8_t initializationMethods_ = 0;
   uint32_t initializationRetries_ = 0;
   uint8_t batteryPercentage_ = 100;
