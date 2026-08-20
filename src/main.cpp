@@ -5,6 +5,7 @@
 #include <M5Unified.h>
 #if defined(CODEX_BOARD_TAB5)
 #include <Preferences.h>
+#include <esp_heap_caps.h>
 #endif
 
 #include <cmath>
@@ -84,6 +85,8 @@ bool touchActive = false;
 uint32_t lastDrawMs = 0;
 #if defined(CODEX_BOARD_TAB5)
 bool drawPending = false;
+uint16_t* regionBuffer = nullptr;
+size_t regionBufferPixels = 0;
 #endif
 uint32_t lastBatteryMs = 0;
 Layout layout{};
@@ -458,7 +461,7 @@ void drawNavigate() {
              "TAP / HOLD SETTINGS");
 }
 
-void drawScreen() {
+void renderScreen() {
   canvas.fillScreen(kBackground);
   drawHeader();
   switch (page) {
@@ -479,12 +482,64 @@ void drawScreen() {
   }
   drawTabs();
   drawUnpairNotice();
+}
+
+void drawScreen() {
+  renderScreen();
   canvas.pushSprite(0, 0);
   lastDrawMs = millis();
 #if defined(CODEX_BOARD_TAB5)
   drawPending = false;
 #endif
 }
+
+#if defined(CODEX_BOARD_TAB5)
+bool pushCanvasRegion(const Rect& region) {
+  const size_t pixels = static_cast<size_t>(region.width) * region.height;
+  if (pixels > regionBufferPixels) {
+    auto* resized = static_cast<uint16_t*>(heap_caps_realloc(
+        regionBuffer, pixels * sizeof(uint16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (resized == nullptr) return false;
+    regionBuffer = resized;
+    regionBufferPixels = pixels;
+  }
+  const auto* source = static_cast<const uint16_t*>(canvas.getBuffer());
+  for (int row = 0; row < region.height; ++row) {
+    memcpy(regionBuffer + static_cast<size_t>(row) * region.width,
+           source + static_cast<size_t>(region.y + row) * layout.width + region.x,
+           static_cast<size_t>(region.width) * sizeof(uint16_t));
+  }
+  M5.Display.pushImage(region.x, region.y, region.width, region.height,
+                       regionBuffer);
+  return true;
+}
+
+Rect taskButtonRect(int agent) {
+  Rect tasks;
+  Rect commands;
+  controlBounds(tasks, commands);
+  return gridButtonRect(tasks, agent, 2);
+}
+
+void redrawTaskRegions(const std::array<bool, 6>& redraw) {
+  renderScreen();
+  for (int i = 0; i < 6; ++i) {
+    if (redraw[i] && !pushCanvasRegion(taskButtonRect(i))) {
+      drawScreen();
+      return;
+    }
+  }
+  lastDrawMs = millis();
+  drawPending = false;
+}
+
+void redrawTaskRegion(int agent) {
+  std::array<bool, 6> redraw{};
+  if (agent >= 0 && agent < 6) redraw[agent] = true;
+  redrawTaskRegions(redraw);
+}
+#endif
 
 void requestDraw() {
 #if defined(CODEX_BOARD_TAB5)
@@ -649,11 +704,20 @@ void pressAction(const TouchAction& action) {
   } else {
     codex.sendKey(action.key, 1, action.agent);
   }
+#if defined(CODEX_BOARD_TAB5)
+  if (page == Page::Control && action.agent >= 0) {
+    redrawTaskRegion(action.agent);
+  } else {
+    requestDraw();
+  }
+#else
   requestDraw();
+#endif
 }
 
 void releaseAction() {
   if (!touchActive) return;
+  const int8_t releasedAgent = activeAction.agent;
   if (activeAction.joystick) {
     codex.sendJoystick(activeAction.angle, 0.0f);
   } else if (!activeAction.encoderStep && activeAction.key != nullptr) {
@@ -661,7 +725,15 @@ void releaseAction() {
   }
   touchActive = false;
   activeAction = {};
+#if defined(CODEX_BOARD_TAB5)
+  if (page == Page::Control && releasedAgent >= 0) {
+    redrawTaskRegion(releasedAgent);
+  } else {
+    requestDraw();
+  }
+#else
   requestDraw();
+#endif
 }
 
 void updateBattery() {
@@ -847,7 +919,30 @@ void loop() {
     threadStateInitialized = false;
   }
   processThreadNotifications(latest);
-#endif
+  const bool headerChanged = latest.connected != state.connected ||
+                             latest.secured != state.secured ||
+                             latest.ready != state.ready ||
+                             latest.diagnostic != state.diagnostic;
+  std::array<bool, 6> changedTasks{};
+  bool taskChanged = false;
+  for (size_t i = 0; i < changedTasks.size(); ++i) {
+    const ThreadLight& before = state.threads[i];
+    const ThreadLight& after = latest.threads[i];
+    changedTasks[i] = before.color != after.color ||
+                      before.brightness != after.brightness ||
+                      before.effect != after.effect ||
+                      before.speed != after.speed;
+    taskChanged = taskChanged || changedTasks[i];
+  }
+  state = latest;
+  if (headerChanged) {
+    requestDraw();
+  } else if (page == Page::Control && taskChanged) {
+    redrawTaskRegions(changedTasks);
+  } else if (latest.dirty && page != Page::Control) {
+    requestDraw();
+  }
+#else
   if (latest.dirty || latest.connected != state.connected ||
       latest.secured != state.secured || latest.ready != state.ready ||
       latest.diagnostic != state.diagnostic) {
@@ -856,14 +951,24 @@ void loop() {
   } else {
     state = latest;
   }
+#endif
 
   if ((page == Page::Tasks || page == Page::Control) && millis() - lastDrawMs > 80) {
+    std::array<bool, 6> animatedTasks{};
     bool animated = false;
-    for (const ThreadLight& light : state.threads) {
-      animated = animated || light.effect == "breath" ||
-                 taskVisualState(light) == TaskVisualState::Error;
+    for (size_t i = 0; i < animatedTasks.size(); ++i) {
+      const ThreadLight& light = state.threads[i];
+      animatedTasks[i] = light.effect == "breath" ||
+                         taskVisualState(light) == TaskVisualState::Error;
+      animated = animated || animatedTasks[i];
     }
-    if (animated) drawScreen();
+    if (animated) {
+#if defined(CODEX_BOARD_TAB5)
+      redrawTaskRegions(animatedTasks);
+#else
+      drawScreen();
+#endif
+    }
   }
 
 #if defined(CODEX_BOARD_TAB5)
