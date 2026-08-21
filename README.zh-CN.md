@@ -51,15 +51,36 @@ Codex Micro 功能的蓝牙控制器。
 
 ## 编译和烧录
 
-克隆仓库后执行：
+克隆仓库后使用适合当前系统的构建脚本。脚本为两块开发板分别使用独立的
+PlatformIO 软件包目录，同时共用 PlatformIO 运行环境和下载缓存。
+
+macOS 或 Linux：
 
 ```sh
-pio run -e m5stack-core2
-pio run -e m5stack-core2 --target upload
+bash ./scripts/build.sh core2
+bash ./scripts/build.sh core2 --target upload
 
 # Tab5 使用：
-pio run -e m5stack-tab5
-pio run -e m5stack-tab5 --target upload
+bash ./scripts/build.sh tab5
+bash ./scripts/build.sh tab5 --target upload
+
+# 在不共用 Framework 软件包的情况下编译两个目标：
+bash ./scripts/build.sh all
+```
+
+Windows PowerShell：
+
+```powershell
+./scripts/build.ps1 core2
+./scripts/build.ps1 core2 --target upload
+
+# Tab5 使用：
+./scripts/build.ps1 tab5
+./scripts/build.ps1 tab5 --target upload
+
+# 在不共用 Framework 软件包的情况下编译两个目标：
+./scripts/build.ps1 all
+
 pio device monitor
 ```
 
@@ -73,10 +94,22 @@ CODEX_MICRO_READY
 常规应用固件位于：
 
 ```text
-.pio/build/m5stack-core2/firmware.bin
-.pio/build/m5stack-tab5/firmware.bin
-.pio/build/m5stack-tab5/firmware.factory.bin
+.pio/build-core2/m5stack-core2/firmware.bin
+.pio/build-tab5/m5stack-tab5/firmware.bin
+.pio/build-tab5/m5stack-tab5/firmware.factory.bin
 ```
+
+Core2 和 Tab5 使用互不兼容的 Arduino-ESP32 版本，Tab5 构建还会应用锁定版本的
+NimBLE 兼容补丁。请避免让直接执行的混合 `pio run` 命令共用同一个软件包目录，
+否则可能替换或修改另一目标所需的 Framework 文件。构建脚本分别使用
+`.pio-packages/core2` 和 `.pio-packages/tab5`，并分别使用 `.pio/build-core2` 和
+`.pio/build-tab5`，避免 PlatformIO 的共享工程校验值让另一开发板的目标文件失效。
+软件包目录均可安全删除；下次构建时 PlatformIO 会重新安装相应目标的软件包。
+
+清理前可执行 `pio system prune --dry-run` 查看可移除的 PlatformIO 下载与缓存，
+确认输出后再执行 `pio system prune`。若只需清除构建产物而保留已安装的软件包，
+macOS/Linux 执行 `bash ./scripts/build.sh all --target clean`，Windows 执行
+`./scripts/build.ps1 all --target clean`。
 
 ## 与 ChatGPT 桌面端配对
 

@@ -9,12 +9,10 @@ fails loudly if the pinned source no longer matches either known form.
 """
 
 from pathlib import Path
+from SCons.Script import COMMAND_LINE_TARGETS
 
 Import("env")  # type: ignore[name-defined]  # Provided by PlatformIO/SCons.
 
-
-framework_dir = Path(env.PioPlatform().get_package_dir("framework-arduinoespressif32"))
-service_source = framework_dir / "libraries" / "BLE" / "src" / "BLEService.cpp"
 
 original = """#if defined(CONFIG_NIMBLE_ENABLED)
   if (pExisting != nullptr) {
@@ -34,13 +32,27 @@ patched = """  // HOGP Report characteristics intentionally reuse UUID 0x2A4D; t
   m_characteristicMap.setByUUID(pCharacteristic, pCharacteristic->getUUID());
 """
 
-source = service_source.read_text(encoding="utf-8")
-if patched in source:
-    print("Tab5 NimBLE duplicate-characteristic patch already applied")
-elif original in source:
-    service_source.write_text(source.replace(original, patched, 1), encoding="utf-8")
-    print("Applied Tab5 NimBLE duplicate-characteristic patch")
-else:
-    raise RuntimeError(
-        f"Pinned BLEService.cpp does not match the expected source: {service_source}"
+def apply_patch() -> None:
+    framework_package = env.PioPlatform().get_package_dir("framework-arduinoespressif32")
+    if framework_package is None:
+        raise RuntimeError("The pinned Tab5 Arduino framework package is not installed")
+
+    service_source = (
+        Path(framework_package) / "libraries" / "BLE" / "src" / "BLEService.cpp"
     )
+    source = service_source.read_text(encoding="utf-8")
+    if patched in source:
+        print("Tab5 NimBLE duplicate-characteristic patch already applied")
+    elif original in source:
+        service_source.write_text(source.replace(original, patched, 1), encoding="utf-8")
+        print("Applied Tab5 NimBLE duplicate-characteristic patch")
+    else:
+        raise RuntimeError(
+            f"Pinned BLEService.cpp does not match the expected source: {service_source}"
+        )
+
+
+if env.GetOption("clean") or "clean" in COMMAND_LINE_TARGETS:
+    print("Skipping Tab5 NimBLE patch while cleaning")
+else:
+    apply_patch()

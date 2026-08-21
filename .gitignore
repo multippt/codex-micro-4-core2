@@ -1,4 +1,5 @@
 .pio/
+.pio-packages/
 .pio-tmp/
 .pio-core/
 .tmp/

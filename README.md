@@ -55,15 +55,37 @@ control, and Work Louder Input have not been validated.
 
 ## Build and flash
 
-Clone the repository and run:
+Clone the repository and use the build wrapper for your platform. It gives each
+board an isolated PlatformIO package directory while retaining the shared
+PlatformIO runtime and download cache.
+
+On macOS or Linux:
 
 ```sh
-pio run -e m5stack-core2
-pio run -e m5stack-core2 --target upload
+bash ./scripts/build.sh core2
+bash ./scripts/build.sh core2 --target upload
 
 # Or, for Tab5:
-pio run -e m5stack-tab5
-pio run -e m5stack-tab5 --target upload
+bash ./scripts/build.sh tab5
+bash ./scripts/build.sh tab5 --target upload
+
+# Build both targets without sharing framework packages:
+bash ./scripts/build.sh all
+```
+
+On Windows PowerShell:
+
+```powershell
+./scripts/build.ps1 core2
+./scripts/build.ps1 core2 --target upload
+
+# Or, for Tab5:
+./scripts/build.ps1 tab5
+./scripts/build.ps1 tab5 --target upload
+
+# Build both targets without sharing framework packages:
+./scripts/build.ps1 all
+
 pio device monitor
 ```
 
@@ -78,10 +100,26 @@ CODEX_MICRO_READY
 The normal application binary is generated at:
 
 ```text
-.pio/build/m5stack-core2/firmware.bin
-.pio/build/m5stack-tab5/firmware.bin
-.pio/build/m5stack-tab5/firmware.factory.bin
+.pio/build-core2/m5stack-core2/firmware.bin
+.pio/build-tab5/m5stack-tab5/firmware.bin
+.pio/build-tab5/m5stack-tab5/firmware.factory.bin
 ```
+
+Core2 and Tab5 intentionally use incompatible Arduino-ESP32 generations. Tab5
+also applies a pinned NimBLE compatibility patch during its build. Avoid direct
+mixed `pio run` invocations backed by one package directory: they can replace or
+modify framework files needed by the other target. The wrapper stores packages
+under `.pio-packages/core2` and `.pio-packages/tab5`. It also uses
+`.pio/build-core2` and `.pio/build-tab5`, preventing PlatformIO's shared project
+checksum from invalidating the other board's objects. Deleting a package
+directory is safe and causes PlatformIO to reinstall that target's packages on
+its next build.
+
+To inspect removable PlatformIO downloads and caches before pruning them, run
+`pio system prune --dry-run`. Run `pio system prune` only after reviewing that
+output. Build outputs can be cleaned without removing installed packages with
+`bash ./scripts/build.sh all --target clean` on macOS/Linux or
+`./scripts/build.ps1 all --target clean` on Windows.
 
 ## Pair with ChatGPT Desktop
 
