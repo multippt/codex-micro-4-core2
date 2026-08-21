@@ -34,6 +34,7 @@ struct CodexMicroState {
   bool connected = false;
   bool secured = false;
   bool ready = false;
+  bool standby = false;
   uint32_t threadRevision = 0;
   String diagnostic;
   bool dirty = true;
@@ -87,8 +88,11 @@ class CodexMicroBle {
   QueueHandle_t responseQueue_ = nullptr;
 #endif
   CodexMicroState state_;
+  std::array<ThreadLight, 6> cachedVisibleThreads_;
   String rpcBuffer_;
   bool inputSubscribed_ = false;
+  bool readySeen_ = false;
+  bool cachedVisibleThreadsValid_ = false;
   std::atomic<bool> outputSeen_{false};
   std::atomic<uint32_t> lastValidRpcMs_{0};
   std::atomic<uint32_t> lastResponseMs_{0};

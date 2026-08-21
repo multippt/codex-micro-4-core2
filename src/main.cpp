@@ -65,6 +65,8 @@ struct Rect {
 
 enum class TaskVisualState : uint8_t { Idle, Active, Waiting, Complete, Error };
 
+constexpr float kStandbyBrightness = 0.25f;
+
 const char* kAgentKeys[] = {"AG00", "AG01", "AG02", "AG03", "AG04", "AG05"};
 const char* kCommandKeys[] = {"ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT12"};
 const char* kCommandLabels[] = {"FAST", "APPROVE", "DECLINE", "FORK", "MIC", "SEND"};
@@ -197,6 +199,8 @@ void drawHeader() {
     snprintf(status, sizeof(status), "UNPAIRING");
   } else if (state.diagnostic == "PAIRING FAILED") {
     snprintf(status, sizeof(status), "PAIR FAILED");
+  } else if (state.standby) {
+    snprintf(status, sizeof(status), "STANDBY");
   } else {
 #if defined(CODEX_BOARD_TAB5)
     snprintf(status, sizeof(status), "%s", state.ready ? "LINK" : "PAIR");
@@ -348,18 +352,20 @@ void drawTasks(const Rect& bounds, int columns = 3, bool spacious = false) {
     const Rect button = gridButtonRect(bounds, i, columns);
     const ThreadLight& light = state.threads[i];
     const TaskVisualState visualState = taskVisualState(light);
+    const float displayBrightness =
+        light.brightness * (state.standby ? kStandbyBrightness : 1.0f);
     float pulse = 1.0f;
-    if (light.effect == "breath") {
+    if (!state.standby && light.effect == "breath") {
       pulse = 0.55f + 0.45f * (std::sin(millis() * 0.006f) * 0.5f + 0.5f);
-    } else if (visualState == TaskVisualState::Error) {
+    } else if (!state.standby && visualState == TaskVisualState::Error) {
       pulse = 0.35f + 0.65f * (std::sin(millis() * 0.012f) * 0.5f + 0.5f);
     }
     const uint16_t baseColor = light.brightness <= 0.01f
                                    ? 0x8410
-                                   : rgb888To565(light.color, light.brightness);
+                                   : rgb888To565(light.color, displayBrightness);
     const uint16_t color = light.brightness <= 0.01f
                                ? 0x4208
-                               : rgb888To565(light.color, light.brightness * pulse);
+                               : rgb888To565(light.color, displayBrightness * pulse);
     char title[12];
     snprintf(title, sizeof(title), "AGENT %d", i + 1);
     const char* status = taskStatusLabel(visualState);
@@ -953,7 +959,8 @@ void loop() {
   }
 #endif
 
-  if ((page == Page::Tasks || page == Page::Control) && millis() - lastDrawMs > 80) {
+  if (!state.standby && (page == Page::Tasks || page == Page::Control) &&
+      millis() - lastDrawMs > 80) {
     std::array<bool, 6> animatedTasks{};
     bool animated = false;
     for (size_t i = 0; i < animatedTasks.size(); ++i) {

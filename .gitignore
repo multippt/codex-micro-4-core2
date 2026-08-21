@@ -1,4 +1,5 @@
 .pio/
+.pio-tmp/
 .pio-core/
 .tmp/
 /src/idf_component.yml

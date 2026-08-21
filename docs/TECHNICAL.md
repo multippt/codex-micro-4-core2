@@ -179,6 +179,16 @@ but the current breathing animation uses a fixed local timing function.
 Ambient and key lighting configuration is stored for protocol compatibility but
 is not rendered because Core2 has no equivalent per-key lighting hardware.
 
+Codex Desktop may intentionally send an all-off lighting model and remove its
+HID input subscription after an inactivity timeout while the BLE connection
+remains established. After a previously ready session enters this state, the
+header shows yellow `STANDBY` and the display restores its last visible Agent
+lighting snapshot at 25 percent brightness. Breathing and error animations are
+frozen so the cached colors do not appear live. A renewed subscription returns
+the header to green `LIVE`/`LINK`, restores normal brightness and animation, and
+allows subsequent host lighting updates to replace the cached display. An
+all-off update remains authoritative while the input subscription is active.
+
 ## Input mapping
 
 The display uses three pages. Page selection is available from the bottom tabs;

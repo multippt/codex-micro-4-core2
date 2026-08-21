@@ -397,8 +397,12 @@ void CodexMicroBle::onConnected(bool connected) {
   state_.connected = connected;
   state_.secured = false;
   state_.ready = false;
+  state_.standby = false;
   state_.diagnostic = connected ? "SECURING" : "";
   state_.dirty = true;
+  readySeen_ = false;
+  cachedVisibleThreadsValid_ = false;
+  cachedVisibleThreads_ = {};
   xSemaphoreGive(stateMutex_);
   inputSubscribed_ = false;
   outputSeen_.store(false);
@@ -421,6 +425,8 @@ void CodexMicroBle::onSecurity(bool encrypted, bool authenticated, bool bonded,
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
   state_.secured = secured;
   state_.ready = secured && inputSubscribed_ && outputSeen_.load();
+  state_.standby = false;
+  readySeen_ = readySeen_ || state_.ready;
   state_.diagnostic = secured ? (state_.ready ? "" : "WAITING FOR CODEX")
                               : "PAIRING FAILED";
   state_.dirty = true;
@@ -432,11 +438,29 @@ void CodexMicroBle::onSecurity(bool encrypted, bool authenticated, bool bonded,
 }
 
 void CodexMicroBle::onSubscribed(uint16_t value) {
-  inputSubscribed_ = value != 0;
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  const bool subscribed = value != 0;
+  const bool enteringStandby = inputSubscribed_ && !subscribed && readySeen_;
+  inputSubscribed_ = subscribed;
   state_.ready = state_.secured && inputSubscribed_ && outputSeen_.load();
-  state_.diagnostic = state_.ready ? "" :
-      (state_.secured ? "WAITING FOR CODEX" : "SECURING");
+  readySeen_ = readySeen_ || state_.ready;
+  state_.standby = subscribed ? false : (state_.standby || enteringStandby);
+  if (enteringStandby && cachedVisibleThreadsValid_) {
+    bool allOff = true;
+    for (const ThreadLight& light : state_.threads) {
+      if (light.brightness > 0.01f && light.color != 0) {
+        allOff = false;
+        break;
+      }
+    }
+    if (allOff) {
+      state_.threads = cachedVisibleThreads_;
+      Serial.println("BLE standby restored cached Agent lighting");
+    }
+  }
+  state_.diagnostic = state_.standby ? "STANDBY" :
+      (state_.ready ? "" :
+       (state_.secured ? "WAITING FOR CODEX" : "SECURING"));
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);
 }
@@ -508,8 +532,11 @@ void CodexMicroBle::onOutput(const uint8_t* data, size_t length) {
   lastValidRpcMs_.store(millis());
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
   state_.ready = state_.secured && inputSubscribed_;
-  state_.diagnostic = state_.ready ? "" :
-      (state_.secured ? "WAITING FOR SUBSCRIBE" : "SECURING");
+  readySeen_ = readySeen_ || state_.ready;
+  state_.standby = readySeen_ && !inputSubscribed_;
+  state_.diagnostic = state_.standby ? "STANDBY" :
+      (state_.ready ? "" :
+       (state_.secured ? "WAITING FOR SUBSCRIBE" : "SECURING"));
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);
   handleRpc(request);
@@ -687,7 +714,20 @@ void CodexMicroBle::updateThreadLighting(JsonArrayConst values) {
                   id, static_cast<unsigned long>(light.color), light.brightness,
                   light.effect.c_str(), light.speed);
   }
-  if (updated) ++state_.threadRevision;
+  if (updated) {
+    ++state_.threadRevision;
+    bool anyVisible = false;
+    for (const ThreadLight& light : state_.threads) {
+      if (light.brightness > 0.01f && light.color != 0) {
+        anyVisible = true;
+        break;
+      }
+    }
+    if (anyVisible) {
+      cachedVisibleThreads_ = state_.threads;
+      cachedVisibleThreadsValid_ = true;
+    }
+  }
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);
 }
