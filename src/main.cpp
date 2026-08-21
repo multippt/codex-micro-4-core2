@@ -18,7 +18,7 @@
 namespace {
 
 enum class Page : uint8_t { Tasks, Commands, Control, Navigate };
-enum class UnpairNotice : uint8_t { None, Success, Failure };
+enum class UnpairNotice : uint8_t { None, Success, Failure, Restarting };
 
 struct TouchAction {
   const char* key = nullptr;
@@ -72,6 +72,7 @@ const char* kCommandKeys[] = {"ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT1
 const char* kCommandLabels[] = {"FAST", "APPROVE", "DECLINE", "FORK", "MIC", "SEND"};
 #if defined(CODEX_BOARD_TAB5)
 constexpr uint8_t kControlCommandOrder[] = {0, 3, 1, 2, 4, 5};
+constexpr char kPendingUnpairKey[] = "pending-unpair";
 #endif
 
 CodexMicroBle codex;
@@ -112,6 +113,7 @@ bool pendingCharging = false;
 uint8_t pendingChargingSamples = 0;
 int pendingBatteryLevel = -1;
 uint8_t pendingBatterySamples = 0;
+bool bootUnpairPending = false;
 #endif
 
 constexpr uint32_t kUnpairHoldMs = 3000;
@@ -180,6 +182,45 @@ void drawCentered(const char* text, int x, int y, int font = 1, uint16_t color =
   canvas.drawString(text, x, y);
 }
 
+void formatConnectionStatus(char* status, size_t size) {
+  if (unpairHolding) {
+    const uint32_t elapsed = min<uint32_t>(kUnpairHoldMs, millis() - unpairHoldStartMs);
+    snprintf(status, size, "UNPAIR %lu%%",
+             static_cast<unsigned long>(elapsed * 100 / kUnpairHoldMs));
+  } else if (unpairTriggered) {
+    snprintf(status, size, "UNPAIRING");
+  } else if (state.diagnostic == "PAIRING FAILED") {
+    snprintf(status, size, "PAIR FAILED");
+  } else if (state.standby) {
+    snprintf(status, size, "STANDBY");
+  } else {
+#if defined(CODEX_BOARD_TAB5)
+    snprintf(status, size, "%s", state.ready ? "LINK" : "PAIR");
+#else
+    snprintf(status, size, "%s", state.ready ? "LIVE" : "PAIR");
+#endif
+  }
+}
+
+#if defined(CODEX_BOARD_TAB5)
+struct HeaderControlLayout {
+  int pairLeft;
+  int pairRight;
+  int soundLeft;
+  int soundRight;
+};
+
+HeaderControlLayout headerControlLayout(const char* status) {
+  canvas.setTextSize(layout.textScale);
+  const int statusWidth = canvas.textWidth(status);
+  const int pairRight = layout.width - layout.margin;
+  const int pairLeft = pairRight - max(150, statusWidth + 34 * layout.textScale);
+  const int soundRight = pairLeft - layout.gap;
+  const int soundLeft = soundRight - 150;
+  return {pairLeft, pairRight, soundLeft, soundRight};
+}
+#endif
+
 void drawHeader() {
   canvas.fillRect(0, 0, layout.width, layout.headerHeight, kBackground);
   canvas.setTextDatum(middle_left);
@@ -191,28 +232,12 @@ void drawHeader() {
   canvas.setTextSize(layout.textScale);
   canvas.setTextColor(kMuted);
   char status[24];
-  if (unpairHolding) {
-    const uint32_t elapsed = min<uint32_t>(kUnpairHoldMs, millis() - unpairHoldStartMs);
-    snprintf(status, sizeof(status), "UNPAIR %lu%%",
-             static_cast<unsigned long>(elapsed * 100 / kUnpairHoldMs));
-  } else if (unpairTriggered) {
-    snprintf(status, sizeof(status), "UNPAIRING");
-  } else if (state.diagnostic == "PAIRING FAILED") {
-    snprintf(status, sizeof(status), "PAIR FAILED");
-  } else if (state.standby) {
-    snprintf(status, sizeof(status), "STANDBY");
-  } else {
-#if defined(CODEX_BOARD_TAB5)
-    snprintf(status, sizeof(status), "%s", state.ready ? "LINK" : "PAIR");
-#else
-    snprintf(status, sizeof(status), "%s", state.ready ? "LIVE" : "PAIR");
-#endif
-  }
+  formatConnectionStatus(status, sizeof(status));
   const uint16_t dot = state.ready ? 0x07E0 : (state.connected ? 0xFFE0 : 0xF800);
   const int statusWidth = canvas.textWidth(status);
 #if defined(CODEX_BOARD_TAB5)
-  const int pairRight = layout.width - layout.margin;
-  const int pairLeft = pairRight - max(150, statusWidth + 34 * layout.textScale);
+  const HeaderControlLayout controls = headerControlLayout(status);
+  const int pairRight = controls.pairRight;
   const int dotX = pairRight - statusWidth - 8 * layout.textScale;
 #else
   const int pairRight = layout.width - layout.margin;
@@ -223,18 +248,25 @@ void drawHeader() {
   canvas.drawString(status, pairRight, layout.headerHeight / 2);
 
 #if defined(CODEX_BOARD_TAB5)
-  const int soundWidth = 150;
-  const int soundRight = pairLeft - layout.gap;
-  const int soundLeft = soundRight - soundWidth;
+  const int soundRight = controls.soundRight;
+  const int soundLeft = controls.soundLeft;
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(soundEnabled ? kText : kMuted);
   canvas.drawString(soundEnabled ? "SOUND" : "MUTE",
                     (soundLeft + soundRight) / 2, layout.headerHeight / 2);
 
+  char batteryText[16];
+  if (batteryLevel < 0) {
+    snprintf(batteryText, sizeof(batteryText), "--%%");
+  } else {
+    snprintf(batteryText, sizeof(batteryText), "%d%%%s", batteryLevel,
+             batteryCharging ? "+" : "");
+  }
   const int batteryRight = soundLeft - 2 * layout.gap;
+  const int batteryTextWidth = canvas.textWidth(batteryText);
   const int iconWidth = 50;
   const int iconHeight = 24;
-  const int iconRight = batteryRight - 76;
+  const int iconRight = batteryRight - batteryTextWidth - layout.gap;
   const int iconLeft = iconRight - iconWidth;
   const int iconTop = (layout.headerHeight - iconHeight) / 2;
   canvas.drawRect(iconLeft, iconTop, iconWidth, iconHeight, kMuted);
@@ -245,13 +277,6 @@ void drawHeader() {
                                     : (batteryCharging ? 0x07E0 : kAccent);
     canvas.fillRect(iconLeft + 3, iconTop + 3, fillWidth, iconHeight - 6,
                     batteryColor);
-  }
-  char batteryText[16];
-  if (batteryLevel < 0) {
-    snprintf(batteryText, sizeof(batteryText), "--%%");
-  } else {
-    snprintf(batteryText, sizeof(batteryText), "%d%%%s", batteryLevel,
-             batteryCharging ? "+" : "");
   }
   canvas.setTextDatum(middle_right);
   canvas.setTextColor(kMuted);
@@ -274,13 +299,19 @@ void drawUnpairNotice() {
   const int x = (layout.width - width) / 2;
   const int y = (layout.height - height) / 2;
   canvas.fillRoundRect(x, y, width, height, 8 * layout.textScale, kPanel);
-  canvas.drawRoundRect(x, y, width, height, 8 * layout.textScale,
-                       unpairNotice == UnpairNotice::Success ? 0x07E0 : 0xF800);
+  const uint16_t noticeColor = unpairNotice == UnpairNotice::Success ? 0x07E0
+                               : (unpairNotice == UnpairNotice::Restarting
+                                      ? kAccent
+                                      : 0xF800);
+  canvas.drawRoundRect(x, y, width, height, 8 * layout.textScale, noticeColor);
   if (unpairNotice == UnpairNotice::Success) {
     drawCentered("UNPAIRED", layout.width / 2, y + height * 2 / 5,
                  2 * layout.textScale, kText);
     drawCentered("FORGET ON HOST", layout.width / 2, y + height * 3 / 5,
                  layout.textScale, kMuted);
+  } else if (unpairNotice == UnpairNotice::Restarting) {
+    drawCentered("RESTARTING BLE", layout.width / 2, y + height / 2,
+                 2 * layout.textScale, kAccent);
   } else {
     drawCentered("UNPAIR FAILED", layout.width / 2, y + height / 2,
                  2 * layout.textScale, 0xF800);
@@ -561,7 +592,10 @@ bool inRect(int x, int y, int left, int top, int width, int height) {
 
 bool isUnpairTarget(int x, int y) {
 #if defined(CODEX_BOARD_TAB5)
-  return y >= 0 && y < layout.headerHeight && x >= layout.width - layout.margin - 150;
+  char status[24];
+  formatConnectionStatus(status, sizeof(status));
+  const HeaderControlLayout controls = headerControlLayout(status);
+  return y >= 0 && y < layout.headerHeight && x >= controls.pairLeft;
 #else
   return y >= 0 && y < layout.headerHeight && x >= layout.width * 2 / 3;
 #endif
@@ -569,10 +603,11 @@ bool isUnpairTarget(int x, int y) {
 
 #if defined(CODEX_BOARD_TAB5)
 bool isSoundTarget(int x, int y) {
-  const int pairLeft = layout.width - layout.margin - 150;
-  const int soundRight = pairLeft - layout.gap;
+  char status[24];
+  formatConnectionStatus(status, sizeof(status));
+  const HeaderControlLayout controls = headerControlLayout(status);
   return y >= 0 && y < layout.headerHeight &&
-         x >= soundRight - 150 && x < soundRight;
+         x >= controls.soundLeft && x < controls.soundRight;
 }
 
 void toggleSound() {
@@ -629,8 +664,25 @@ void finishUnpairHold() {
   unpairHolding = false;
   unpairTriggered = true;
   drawScreen();
-  const bool success = codex.clearBonds();
-  unpairNotice = success ? UnpairNotice::Success : UnpairNotice::Failure;
+  const BondClearResult result = codex.clearBonds();
+#if defined(CODEX_BOARD_TAB5)
+  if (result == BondClearResult::RestartRequired) {
+    preferences.begin("codex-micro", false);
+    const bool recoveryPersisted =
+        preferences.putBool(kPendingUnpairKey, true) == sizeof(bool);
+    preferences.end();
+    if (recoveryPersisted) {
+      unpairNotice = UnpairNotice::Restarting;
+      drawScreen();
+      delay(750);
+      ESP.restart();
+      return;
+    }
+    Serial.println("Failed to persist pending Tab5 unpair recovery");
+  }
+#endif
+  unpairNotice = result == BondClearResult::Success ? UnpairNotice::Success
+                                                    : UnpairNotice::Failure;
   unpairNoticeUntilMs = millis() + kUnpairNoticeMs;
   drawScreen();
 }
@@ -830,8 +882,10 @@ void setup() {
   config.clear_display = true;
   M5.begin(config);
 #if defined(CODEX_BOARD_TAB5)
-  preferences.begin("codex-micro", true);
+  preferences.begin("codex-micro", false);
   soundEnabled = preferences.getBool("sound", true);
+  bootUnpairPending = preferences.getBool(kPendingUnpairKey, false);
+  if (bootUnpairPending) preferences.remove(kPendingUnpairKey);
   preferences.end();
   speakerReady = M5.Speaker.begin();
   if (speakerReady) M5.Speaker.setVolume(kSpeakerVolume);
@@ -863,6 +917,15 @@ void setup() {
   Serial.println("Starting BLE (Tab5 uses the ESP32-C6 hosted controller)");
   codex.begin();
   state = codex.snapshot();
+#if defined(CODEX_BOARD_TAB5)
+  if (bootUnpairPending) {
+    Serial.println("Retrying pending Tab5 bond clear after automatic restart");
+    const BondClearResult result = codex.clearBonds();
+    unpairNotice = result == BondClearResult::Success ? UnpairNotice::Success
+                                                      : UnpairNotice::Failure;
+    unpairNoticeUntilMs = millis() + kUnpairNoticeMs;
+  }
+#endif
   updateBattery();
   drawScreen();
   Serial.println("CODEX_MICRO_READY");

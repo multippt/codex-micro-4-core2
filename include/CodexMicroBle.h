@@ -40,6 +40,8 @@ struct CodexMicroState {
   bool dirty = true;
 };
 
+enum class BondClearResult : uint8_t { Success, Failure, RestartRequired };
+
 class CodexMicroBle {
  public:
   static constexpr uint16_t kVendorId = 0x303A;
@@ -51,7 +53,7 @@ class CodexMicroBle {
   void sendKey(const char* key, uint8_t action, int8_t agent = -1);
   void sendJoystick(float angle, float distance);
   void maintain();
-  bool clearBonds();
+  BondClearResult clearBonds();
   bool connected();
   CodexMicroState snapshot();
 

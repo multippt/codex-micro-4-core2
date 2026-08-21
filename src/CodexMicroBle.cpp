@@ -298,11 +298,12 @@ void CodexMicroBle::maintain() {
 #endif
 }
 
-bool CodexMicroBle::clearBonds() {
+BondClearResult CodexMicroBle::clearBonds() {
   clearingBonds_ = true;
   BLEDevice::getAdvertising()->stop();
   Serial.println("BLE advertising stopped for unpair");
   bool success = true;
+  bool disconnectTimedOut = false;
 
   if (server_ != nullptr && connected()) {
     Serial.println("Disconnecting BLE host for unpair");
@@ -314,6 +315,7 @@ bool CodexMicroBle::clearBonds() {
     if (connected()) {
       Serial.println("BLE host disconnect timed out during unpair");
       success = false;
+      disconnectTimedOut = true;
     }
   }
 
@@ -340,25 +342,20 @@ bool CodexMicroBle::clearBonds() {
     }
   }
 #elif defined(CONFIG_NIMBLE_ENABLED)
-  ble_addr_t peers[MYNEWT_VAL(BLE_STORE_MAX_BONDS)];
-  int count = 0;
-  if (ble_store_util_bonded_peers(peers, &count, MYNEWT_VAL(BLE_STORE_MAX_BONDS)) != 0) {
-    success = false;
-  } else {
-    Serial.printf("BLE bonds before clear=%d\n", count);
-    for (int i = 0; i < count; ++i) {
-      if (ble_store_util_delete_peer(&peers[i]) != 0) {
-        success = false;
-      }
-    }
-    int remaining = 0;
-    if (ble_store_util_bonded_peers(peers, &remaining,
-                                    MYNEWT_VAL(BLE_STORE_MAX_BONDS)) != 0) {
-      success = false;
-    }
-    Serial.printf("BLE bonds after clear=%d\n", remaining);
-    success = success && remaining == 0;
+  bool storeCleared = false;
+  for (int attempt = 1; attempt <= 2 && !storeCleared; ++attempt) {
+    const int clearResult = ble_store_clear();
+    ble_addr_t peers[MYNEWT_VAL(BLE_STORE_MAX_BONDS)];
+    int remaining = -1;
+    const int listResult = ble_store_util_bonded_peers(
+        peers, &remaining, MYNEWT_VAL(BLE_STORE_MAX_BONDS));
+    storeCleared = listResult == 0 && remaining == 0;
+    Serial.printf(
+        "BLE bond store clear attempt=%d rc=%d list_rc=%d remaining=%d\n",
+        attempt, clearResult, listResult, remaining);
+    if (!storeCleared && attempt == 1) delay(100);
   }
+  success = storeCleared && !disconnectTimedOut;
 #else
   success = false;
 #endif
@@ -367,7 +364,11 @@ bool CodexMicroBle::clearBonds() {
   BLEDevice::startAdvertising();
   Serial.println("BLE advertising restarted after unpair");
   Serial.printf("BLE bonds clear %s\n", success ? "complete" : "failed");
-  return success;
+#if defined(CONFIG_NIMBLE_ENABLED)
+  return success ? BondClearResult::Success : BondClearResult::RestartRequired;
+#else
+  return success ? BondClearResult::Success : BondClearResult::Failure;
+#endif
 }
 
 bool CodexMicroBle::connected() {

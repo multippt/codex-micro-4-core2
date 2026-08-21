@@ -118,6 +118,11 @@ After `UNPAIRED — FORGET ON HOST` appears, also forget **Codex Micro** in the
 computer's Bluetooth settings. Device-side unpairing cannot remove the Bluetooth
 record stored by macOS.
 
+If the host record was forgotten first, Tab5 clears its complete local NimBLE
+bond store. If the hosted Bluetooth stack cannot complete that operation while
+running, the firmware automatically restarts once and retries; no physical reset
+is required.
+
 ### Tasks page
 
 | Control | Behavior |

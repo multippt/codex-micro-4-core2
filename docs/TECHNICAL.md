@@ -240,10 +240,13 @@ or entered code. Pair the device in a trusted physical and radio environment.
 Holding the upper-right connection status for three seconds invokes the
 transport's local bond-clear operation. Advertising is paused, the active
 connection is terminated, and all stored bonds are removed. Core2 enumerates
-and removes Bluedroid bond records; Tab5 enumerates bonded NimBLE peers and
-removes each with `ble_store_util_delete_peer()`. Advertising then resumes in the same runtime.
-The UI reports success or failure for five seconds and reminds the user that the
-host-side Bluetooth record must be removed separately.
+and removes Bluedroid bond records. Tab5 clears the complete NimBLE store with
+`ble_store_clear()`, verifies that no bonded peers remain, and retries once if
+needed. If the hosted Bluetooth stack remains inconsistent after the host
+forgets its record first, Tab5 stores a one-shot recovery flag, restarts, and
+retries during the next boot. The flag is removed before retrying, preventing a
+reboot loop. Advertising then resumes, and the UI reports success or failure for
+five seconds.
 
 The firmware does not contain Wi-Fi credentials, an OpenAI API client, analytics,
 or an update service. It sends control events and device status to the connected
