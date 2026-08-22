@@ -128,6 +128,27 @@ void test_default_page_change_selects_first_action() {
   TEST_ASSERT_EQUAL_UINT8(0, ui.selection());
 }
 
+void test_user_selection_wins_after_queued_host_update() {
+  StickUiController ui;
+
+  // Apply the already-queued host selection before processing user input.
+  ui.noteAgent(2);
+  ui.changePage(-1, StickPageSelection::PreviousArrow);
+  ui.changePage(1, StickPageSelection::PreviousArrow);
+  ui.move(-1);
+
+  // Activating Agent 6 does not advance or restore the older host selection.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StickPage::Agents),
+                        static_cast<int>(ui.page()));
+  TEST_ASSERT_EQUAL_UINT8(5, ui.selection());
+  TEST_ASSERT_EQUAL_UINT8(5, ui.selectedAgent());
+
+  // A genuinely newer host update still retains the host-follow behavior.
+  ui.noteAgent(4);
+  TEST_ASSERT_EQUAL_UINT8(4, ui.selection());
+  TEST_ASSERT_EQUAL_UINT8(4, ui.selectedAgent());
+}
+
 void test_urgent_state_classification() {
   TEST_ASSERT_FALSE(codex_micro::stickAgentUrgent(0));
   TEST_ASSERT_FALSE(codex_micro::stickAgentUrgent(1));
@@ -148,6 +169,7 @@ int main(int, char**) {
   RUN_TEST(test_next_arrow_persists_across_all_pages);
   RUN_TEST(test_previous_arrow_persists_across_all_pages);
   RUN_TEST(test_default_page_change_selects_first_action);
+  RUN_TEST(test_user_selection_wins_after_queued_host_update);
   RUN_TEST(test_urgent_state_classification);
   return UNITY_END();
 }

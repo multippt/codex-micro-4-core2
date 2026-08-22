@@ -321,18 +321,35 @@ void drawScreen() {
   lastDrawMs = millis();
 }
 
+void logSelectorChange(const char* source, StickPage previousPage,
+                       uint8_t previousSelection) {
+  if (ui.page() == previousPage && ui.selection() == previousSelection) return;
+  Serial.printf("StickS3 selector source=%s page=%u->%u selection=%u->%u\n",
+                source, static_cast<unsigned>(previousPage),
+                static_cast<unsigned>(ui.page()), previousSelection,
+                ui.selection());
+}
+
 void changePage(int8_t delta, codex_micro::StickPageSelection destination) {
+  const StickPage previousPage = ui.page();
+  const uint8_t previousSelection = ui.selection();
   ui.changePage(delta, destination);
+  logSelectorChange("page-arrow", previousPage, previousSelection);
   drawScreen();
 }
 
 void handleGesture(StickGesture gesture) {
+  const StickPage previousPage = ui.page();
+  const uint8_t previousSelection = ui.selection();
   if (gesture == StickGesture::Next) ui.move(1);
   else if (gesture == StickGesture::Previous) ui.move(-1);
   else if (gesture == StickGesture::NextPage && !ui.confirmingUnpair()) {
     ui.changePage(1);
   }
-  if (gesture != StickGesture::None) drawScreen();
+  if (gesture != StickGesture::None) {
+    logSelectorChange("side-button", previousPage, previousSelection);
+    drawScreen();
+  }
 }
 
 void tapKey(const char* key, int8_t agent = -1) {
@@ -393,7 +410,10 @@ void activateSelection() {
 
   switch (ui.page()) {
     case StickPage::Agents:
-      if (selected < 6) tapKey(kAgentKeys[selected], selected);
+      if (selected < 6) {
+        Serial.printf("StickS3 activate agent=%u\n", selected);
+        tapKey(kAgentKeys[selected], selected);
+      }
       break;
     case StickPage::Commands:
       if (selected < 6) tapKey(kCommandKeys[kCommandOrder[selected]]);
@@ -439,7 +459,12 @@ void updateRecentAgent(const CodexMicroState& latest) {
     }
   }
   const int chosen = newestUrgent >= 0 ? newestUrgent : newest;
-  if (chosen >= 0) ui.noteAgent(static_cast<uint8_t>(chosen));
+  if (chosen >= 0) {
+    const StickPage previousPage = ui.page();
+    const uint8_t previousSelection = ui.selection();
+    ui.noteAgent(static_cast<uint8_t>(chosen));
+    logSelectorChange("host-activity", previousPage, previousSelection);
+  }
   if (attention && soundEnabled && speakerReady) M5.Speaker.tone(1000, 90);
 }
 
@@ -508,17 +533,19 @@ void loop() {
   codex.maintain();
   const uint32_t now = millis();
 
-  if (M5.BtnB.wasPressed()) buttonB.pressed(now);
-  handleGesture(buttonB.update(now));
-  if (M5.BtnB.wasReleased()) handleGesture(buttonB.released(now));
-  if (M5.BtnA.wasReleased()) activateSelection();
-
+  // Consume host state first so physical input remains the final selection
+  // authority when both arrive during the same loop iteration.
   CodexMicroState latest = codex.snapshot();
   const bool stateChanged = latest.dirty || latest.connected != state.connected ||
                             latest.threadRevision != state.threadRevision;
   updateRecentAgent(latest);
   state = latest;
   if (stateChanged) drawScreen();
+
+  if (M5.BtnB.wasPressed()) buttonB.pressed(now);
+  handleGesture(buttonB.update(now));
+  if (M5.BtnB.wasReleased()) handleGesture(buttonB.released(now));
+  if (M5.BtnA.wasReleased()) activateSelection();
 
   if (notice != Notice::None && static_cast<int32_t>(now - noticeUntilMs) >= 0) {
     notice = Notice::None;
