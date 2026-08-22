@@ -34,6 +34,14 @@ sequenceDiagram
 
 ## 构建环境
 
+StickS3 使用独立的 `main_sticks3.cpp` 入口和 `m5stack-sticks3` 环境，目标为
+带 8 MB Flash/PSRAM 的 ESP32-S3、M5Unified 0.2.12，以及原生 135 x 240 的
+16 位画布。与硬件无关的控制器将延迟单击、双击、长按、页面/网格选择和取消配对
+确认逻辑与显示及 BLE 代码分离。
+
+每次线程更新都会记录单调递增的顺序值。StickS3 根据该值选择最近变化的 Agent，
+并在同一批更新中优先等待批准或错误状态；该 Agent 选择与当前显示页面相互独立。
+
 PlatformIO 环境保持精简并锁定关键版本：
 
 | 设置 | 值 |

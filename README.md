@@ -1,8 +1,8 @@
-# M5Stack Core2 / Tab5 Codex Micro
+# M5Stack Core2 / Tab5 / StickS3 Codex Micro
 
 [简体中文](README.zh-CN.md)
 
-An independent, open-source compatibility firmware that turns an M5Stack Core2 or Tab5
+An independent, open-source compatibility firmware that turns an M5Stack Core2, Tab5, or StickS3
 into a Bluetooth controller for Codex Micro features in the ChatGPT desktop
 app.
 
@@ -141,6 +141,27 @@ physical pairing control, lighting hardware, and extra layers, do not apply to
 this firmware.
 
 ## Controls
+
+### StickS3
+
+StickS3 uses a portrait, non-touch four-page interface. **Agents** shows six
+numbered tiles in a 2 x 3 grid; **Commands** uses large labels plus tick/cross
+icons; **Navigate** provides directions and dial actions; **Config** provides
+Unpair and Mute. Select the bottom `<` or `>` tiles to change pages.
+
+Press the main button (`BtnA`) to activate the selected tile. Single-press the
+side button (`BtnB`) for the next tile, double-press within 350 ms for the
+previous tile, or hold for 500 ms for the next page. Host activity always updates
+the selected Agent, prioritizing approval/error states, without changing the
+visible page. Mute persists across restarts. Unpair requires explicit cross/tick
+confirmation.
+
+Build and upload StickS3 with:
+
+```sh
+pio run -e m5stack-sticks3
+pio run -e m5stack-sticks3 -t upload
+```
 
 The bottom touchscreen tabs switch between the three pages. Core2's A, B, and C
 touch buttons provide additional shortcuts; Tab5 uses the on-screen tabs.

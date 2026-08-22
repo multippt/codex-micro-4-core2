@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 {core2|tab5|all} [PlatformIO arguments...]" >&2
+  echo "Usage: $0 {core2|tab5|sticks3|all} [PlatformIO arguments...]" >&2
 }
 
 target="${1:-core2}"
@@ -18,8 +18,11 @@ case "$target" in
   tab5)
     builds=("tab5:m5stack-tab5")
     ;;
+  sticks3)
+    builds=("sticks3:m5stack-sticks3")
+    ;;
   all)
-    builds=("core2:m5stack-core2" "tab5:m5stack-tab5")
+    builds=("core2:m5stack-core2" "tab5:m5stack-tab5" "sticks3:m5stack-sticks3")
     ;;
   *)
     usage

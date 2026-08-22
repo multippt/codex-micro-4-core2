@@ -1,4 +1,4 @@
-# M5Stack Core2 / Tab5 Codex Micro
+# M5Stack Core2 / Tab5 / StickS3 Codex Micro
 
 [English](README.md)
 
@@ -128,6 +128,24 @@ OpenAI 官方 Codex Micro 使用说明位于
 USB 模式、物理配对控件、灯光硬件和额外层说明不适用于本 Core2 固件。
 
 ## 操作说明
+
+### StickS3
+
+StickS3 使用竖屏、无触摸的四页界面。**Agents** 以 2 x 3 网格显示六个编号方块；
+**Commands** 使用大字号标签和勾/叉图标；**Navigate** 提供方向与旋钮动作；
+**Config** 提供取消配对和静音。选择底部 `<` 或 `>` 方块切换页面。
+
+主按键（`BtnA`）执行当前选中项。侧按键（`BtnB`）单击选择下一项，350 ms 内
+双击选择上一项，长按 500 ms 切换到下一页。主机活动会持续更新选中的 Agent，
+优先处理等待批准或错误状态，但不会强制切换当前页面。静音设置会持久保存；取消
+配对必须在叉/勾确认页中明确确认。
+
+构建和烧录 StickS3：
+
+```sh
+pio run -e m5stack-sticks3
+pio run -e m5stack-sticks3 -t upload
+```
 
 屏幕底部标签可切换三个页面。Core2 还可使用 A、B、C 触摸按钮快捷切换；
 Tab5 使用屏幕标签。

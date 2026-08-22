@@ -37,6 +37,16 @@ sequenceDiagram
 
 ## Build environment
 
+StickS3 uses its own `main_sticks3.cpp` entry point and the
+`m5stack-sticks3` environment. It targets the ESP32-S3 with 8 MB flash/PSRAM,
+M5Unified 0.2.12, and a native 135 x 240 16-bit canvas. Its hardware-independent
+controller separates delayed single clicks, double clicks, holds, page/grid
+selection, and unpair confirmation from display and BLE work.
+
+Each thread update carries a monotonically increasing order value. StickS3 uses
+those values to select the latest changed Agent, preferring waiting/error states
+within a batch. This stored Agent selection is independent of the visible page.
+
 The two PlatformIO environments are intentionally pinned:
 
 | Setting | Value |

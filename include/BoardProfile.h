@@ -3,7 +3,14 @@
 
 #pragma once
 
-#if defined(CODEX_BOARD_TAB5)
+#if defined(CODEX_BOARD_STICKS3)
+constexpr char kBoardName[] = "M5Stack StickS3";
+constexpr char kFirmwareVersion[] = "0.3.0-sticks3";
+constexpr char kBootMessage[] = "Codex Micro StickS3 boot";
+constexpr bool kHasPageButtons = false;
+constexpr uint8_t kDisplayRotation = 0;
+constexpr uint8_t kDisplayBrightness = 120;
+#elif defined(CODEX_BOARD_TAB5)
 constexpr char kBoardName[] = "M5Stack Tab5";
 constexpr char kFirmwareVersion[] = "0.2.0-tab5";
 constexpr char kBootMessage[] = "Codex Micro Tab5 boot";

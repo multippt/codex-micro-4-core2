@@ -29,6 +29,7 @@ struct LightingSide {
 
 struct CodexMicroState {
   std::array<ThreadLight, 6> threads;
+  std::array<uint32_t, 6> threadUpdateOrder{};
   LightingSide ambient;
   LightingSide keys;
   bool connected = false;
@@ -36,6 +37,7 @@ struct CodexMicroState {
   bool ready = false;
   bool standby = false;
   uint32_t threadRevision = 0;
+  uint32_t threadUpdateSequence = 0;
   String diagnostic;
   bool dirty = true;
 };

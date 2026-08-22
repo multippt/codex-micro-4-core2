@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("core2", "tab5", "all")]
+    [ValidateSet("core2", "tab5", "sticks3", "all")]
     [string] $Target = "core2",
 
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
@@ -26,10 +26,12 @@ if ($null -ne $pioCommand) {
 $targets = switch ($Target) {
     "core2" { @(@{ Name = "core2"; Environment = "m5stack-core2" }) }
     "tab5"  { @(@{ Name = "tab5"; Environment = "m5stack-tab5" }) }
+    "sticks3" { @(@{ Name = "sticks3"; Environment = "m5stack-sticks3" }) }
     "all"   {
         @(
             @{ Name = "core2"; Environment = "m5stack-core2" }
             @{ Name = "tab5"; Environment = "m5stack-tab5" }
+            @{ Name = "sticks3"; Environment = "m5stack-sticks3" }
         )
     }
 }

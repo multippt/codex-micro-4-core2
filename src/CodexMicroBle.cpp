@@ -706,11 +706,22 @@ void CodexMicroBle::updateThreadLighting(JsonArrayConst values) {
       continue;
     }
     ThreadLight& light = state_.threads[id];
+    const uint32_t previousColor = light.color;
+    const float previousBrightness = light.brightness;
+    const String previousEffect = light.effect;
+    const float previousSpeed = light.speed;
     light.color = value["c"] | light.color;
     light.brightness = value["b"] | light.brightness;
     light.effect = value["e"] | light.effect;
     light.speed = value["s"] | light.speed;
-    updated = true;
+    const bool changed = previousColor != light.color ||
+                         previousBrightness != light.brightness ||
+                         previousEffect != light.effect ||
+                         previousSpeed != light.speed;
+    if (changed) {
+      state_.threadUpdateOrder[id] = ++state_.threadUpdateSequence;
+      updated = true;
+    }
     Serial.printf("BLE task light id=%d color=%06lX brightness=%.2f effect=%s speed=%.2f\n",
                   id, static_cast<unsigned long>(light.color), light.brightness,
                   light.effect.c_str(), light.speed);
