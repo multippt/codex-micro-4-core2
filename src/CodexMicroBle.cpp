@@ -21,7 +21,11 @@ constexpr char kDeviceName[] = "Codex Micro";
 constexpr char kManufacturer[] = "Work Louder";
 constexpr size_t kPayloadSize = 61;
 constexpr size_t kReportBodySize = 63;
-#if defined(CODEX_BOARD_TAB5)
+#if defined(CODEX_BOARD_STICKS3)
+constexpr uint16_t kAttMtu = 185;
+constexpr uint16_t kMinimumReportMtu = kReportBodySize + 3;
+#endif
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
 constexpr uint8_t kInitializationCompleteMask = 0x0F;
 #endif
 
@@ -109,6 +113,19 @@ class CodexMicroBle::ServerCallbacks final : public BLEServerCallbacks {
   }
 #endif
 
+#if defined(CODEX_BOARD_STICKS3) && defined(CONFIG_BLUEDROID_ENABLED)
+  void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
+    if (param == nullptr) return;
+    const uint16_t mtu = param->mtu.mtu;
+    Serial.printf("BLE MTU conn=%u mtu=%u\n", param->mtu.conn_id, mtu);
+    if (mtu < kMinimumReportMtu) {
+      Serial.printf("BLE MTU insufficient: need >=%u for %u-byte HID reports\n",
+                    kMinimumReportMtu,
+                    static_cast<unsigned>(kReportBodySize));
+    }
+  }
+#endif
+
   void onDisconnect(BLEServer*) override {
     owner_.onConnected(false);
     if (!owner_.clearingBonds_.load()) {
@@ -176,6 +193,10 @@ void CodexMicroBle::begin() {
 #endif
 
   BLEDevice::init(kDeviceName);
+#if defined(CODEX_BOARD_STICKS3)
+  BLEDevice::setMTU(kAttMtu);
+  Serial.printf("BLE local MTU configured=%u\n", kAttMtu);
+#endif
   BLEDevice::setSecurityCallbacks(new CodexSecurityCallbacks(*this));
 
   auto* security = new BLESecurity();
@@ -239,6 +260,15 @@ void CodexMicroBle::begin() {
 #else
   input_ = hid_->inputReport(kReportId);
   output_ = hid_->outputReport(kReportId);
+#if defined(CODEX_BOARD_STICKS3)
+  // Match the stable Tab5 registration behavior: expose the concrete report
+  // value length before the HID service enters the Bluedroid GATT database.
+  // Windows otherwise sees zero-length report characteristics even though
+  // the report map declares 63 bytes, and may omit the input subscription.
+  uint8_t emptyReport[kReportBodySize] = {};
+  input_->setValue(emptyReport, sizeof(emptyReport));
+  output_->setValue(emptyReport, sizeof(emptyReport));
+#endif
 #endif
   input_->setCallbacks(new InputCallbacks(*this));
   output_->setCallbacks(new OutputCallbacks(*this));
@@ -502,12 +532,20 @@ void CodexMicroBle::onSubscribed(uint16_t value) {
 void CodexMicroBle::onNotifyStatus(int status, uint32_t code) {
   Serial.printf("BLE input notify status=%d code=%lu\n", status,
                 static_cast<unsigned long>(code));
-#if defined(CODEX_BOARD_TAB5)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
   if (status == static_cast<int>(BLECharacteristicCallbacks::SUCCESS_NOTIFY)) {
     notifySuccessCount_.fetch_add(1);
   } else {
     notifyFailureCount_.fetch_add(1);
     Serial.println("BLE input notification failure");
+  }
+#endif
+#if defined(CODEX_BOARD_STICKS3)
+  if (status == static_cast<int>(BLECharacteristicCallbacks::SUCCESS_NOTIFY)) {
+    if (!inputSubscribed_) onSubscribed(1);
+  } else if (status == static_cast<int>(
+                 BLECharacteristicCallbacks::ERROR_NOTIFY_DISABLED)) {
+    if (inputSubscribed_) onSubscribed(0);
   }
 #endif
 }
@@ -583,7 +621,7 @@ void CodexMicroBle::handleRpc(const JsonDocument& request) {
   JsonVariantConst params = request["params"];
   Serial.printf("RPC method=%s\n", method);
 
-#if defined(CODEX_BOARD_TAB5)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
   uint8_t methodBit = 0;
   if (strcmp(method, "sys.version") == 0) methodBit = 0x01;
   else if (strcmp(method, "device.status") == 0) methodBit = 0x02;
@@ -707,6 +745,12 @@ void CodexMicroBle::transmitJson(const char* json, size_t length) {
 
   size_t offset = 0;
   const size_t framedLength = length + 1;
+#if defined(CODEX_BOARD_STICKS3)
+  const size_t reportCount = (framedLength + kPayloadSize - 1) / kPayloadSize;
+  Serial.printf("BLE RPC transmit bytes=%u reports=%u\n",
+                static_cast<unsigned>(framedLength),
+                static_cast<unsigned>(reportCount));
+#endif
   while (offset < framedLength) {
     const size_t chunk = min<size_t>(kPayloadSize, framedLength - offset);
     uint8_t report[kReportBodySize] = {};
