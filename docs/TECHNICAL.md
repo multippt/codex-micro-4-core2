@@ -223,9 +223,13 @@ screens redraw on input, connection changes, or host state changes.
 ## Battery and power
 
 The board battery percentage and charging flag are sampled at startup and every
-30 seconds. The percentage is clamped to 0 through 100. If the power API returns
-an invalid negative level, the firmware reports 100 percent as a compatibility
-fallback.
+30 seconds. Tab5 filters valid INA226 samples and retains its last valid level
+across transient read failures. If no valid sample has ever been observed, or
+the Tab5 reports its battery-absent full-scale voltage with zero battery current,
+the local header shows a lightning symbol and `USB` instead of inventing a
+battery percentage. The firmware still reports 100 percent and not charging to
+the host in this state because the HID Battery characteristic cannot represent
+an unknown or battery-absent value safely across supported operating systems.
 
 The standard BLE HID battery characteristic is updated while connected, and
 `device.status` returns both the cached percentage and charging state.

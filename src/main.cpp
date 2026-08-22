@@ -90,6 +90,13 @@ uint32_t lastDrawMs = 0;
 bool drawPending = false;
 uint16_t* regionBuffer = nullptr;
 size_t regionBufferPixels = 0;
+uint32_t renderTimingWindowMs = 0;
+uint32_t fullRenderTotalUs = 0;
+uint32_t tileRenderTotalUs = 0;
+uint32_t displayTransferTotalUs = 0;
+uint32_t fullRenderCount = 0;
+uint32_t tileRenderCount = 0;
+uint32_t displayTransferCount = 0;
 #endif
 uint32_t lastBatteryMs = 0;
 Layout layout{};
@@ -107,6 +114,7 @@ uint32_t lastThreadRevision = 0;
 std::array<TaskVisualState, 6> previousTaskStates{};
 std::array<bool, 6> attentionAlerted{};
 int batteryLevel = -1;
+bool externalPower = true;
 bool batteryCharging = false;
 bool batteryChargingInitialized = false;
 bool pendingCharging = false;
@@ -122,6 +130,7 @@ constexpr uint32_t kUnpairNoticeMs = 5000;
 constexpr uint8_t kSpeakerVolume = 96;
 constexpr float kNotificationFrequency = 1000.0f;
 constexpr uint32_t kNotificationDurationMs = 90;
+constexpr int kExternalPowerCurrentThresholdMa = 2;
 #endif
 
 void updateLayout() {
@@ -256,8 +265,8 @@ void drawHeader() {
                     (soundLeft + soundRight) / 2, layout.headerHeight / 2);
 
   char batteryText[16];
-  if (batteryLevel < 0) {
-    snprintf(batteryText, sizeof(batteryText), "--%%");
+  if (externalPower) {
+    snprintf(batteryText, sizeof(batteryText), "USB");
   } else {
     snprintf(batteryText, sizeof(batteryText), "%d%%%s", batteryLevel,
              batteryCharging ? "+" : "");
@@ -271,7 +280,18 @@ void drawHeader() {
   const int iconTop = (layout.headerHeight - iconHeight) / 2;
   canvas.drawRect(iconLeft, iconTop, iconWidth, iconHeight, kMuted);
   canvas.fillRect(iconRight, iconTop + 7, 5, iconHeight - 14, kMuted);
-  if (batteryLevel >= 0) {
+  if (externalPower) {
+    const int centerX = iconLeft + iconWidth / 2;
+    const int centerY = iconTop + iconHeight / 2;
+    const int boltWidth = 5 * layout.textScale;
+    const int boltHeight = 5 * layout.textScale;
+    canvas.fillTriangle(centerX + boltWidth / 3, centerY - boltHeight,
+                        centerX - boltWidth, centerY + 1,
+                        centerX, centerY + 1, kText);
+    canvas.fillTriangle(centerX - boltWidth / 3, centerY + boltHeight,
+                        centerX + boltWidth, centerY - 1,
+                        centerX, centerY - 1, kText);
+  } else if (batteryLevel >= 0) {
     const int fillWidth = (iconWidth - 6) * min(100, batteryLevel) / 100;
     const uint16_t batteryColor = batteryLevel <= 15 ? 0xF800
                                     : (batteryCharging ? 0x07E0 : kAccent);
@@ -378,43 +398,45 @@ void drawButton(int x, int y, int width, int height, const char* label, uint16_t
   }
 }
 
-void drawTasks(const Rect& bounds, int columns = 3, bool spacious = false) {
-  for (int i = 0; i < 6; ++i) {
-    const Rect button = gridButtonRect(bounds, i, columns);
-    const ThreadLight& light = state.threads[i];
-    const TaskVisualState visualState = taskVisualState(light);
-    const float displayBrightness =
-        light.brightness * (state.standby ? kStandbyBrightness : 1.0f);
-    float pulse = 1.0f;
-    if (!state.standby && light.effect == "breath") {
-      pulse = 0.55f + 0.45f * (std::sin(millis() * 0.006f) * 0.5f + 0.5f);
-    } else if (!state.standby && visualState == TaskVisualState::Error) {
-      pulse = 0.35f + 0.65f * (std::sin(millis() * 0.012f) * 0.5f + 0.5f);
-    }
-    const uint16_t baseColor = light.brightness <= 0.01f
-                                   ? 0x8410
-                                   : rgb888To565(light.color, displayBrightness);
-    const uint16_t color = light.brightness <= 0.01f
-                               ? 0x4208
-                               : rgb888To565(light.color, displayBrightness * pulse);
-    char title[12];
-    snprintf(title, sizeof(title), "AGENT %d", i + 1);
-    const char* status = taskStatusLabel(visualState);
-    const bool pressed = touchActive && activeAction.agent == i;
-    drawButton(button.x, button.y, button.width, button.height, title, color,
-               pressed, status, spacious, spacious ? 5 : 1,
-               spacious ? baseColor : kText,
-               spacious ? baseColor : kMuted);
-    if (spacious) {
-      canvas.fillCircle(button.x + 12 * layout.textScale,
-                        button.y + button.height * 72 / 100,
-                        3 * layout.textScale, color);
-    } else {
-      canvas.fillCircle(button.x + button.width - 12 * layout.textScale,
-                        button.y + 12 * layout.textScale,
-                        4 * layout.textScale, color);
-    }
+void drawTask(const Rect& bounds, int i, int columns = 3, bool spacious = false) {
+  const Rect button = gridButtonRect(bounds, i, columns);
+  const ThreadLight& light = state.threads[i];
+  const TaskVisualState visualState = taskVisualState(light);
+  const float displayBrightness =
+      light.brightness * (state.standby ? kStandbyBrightness : 1.0f);
+  float pulse = 1.0f;
+  if (!state.standby && light.effect == "breath") {
+    pulse = 0.55f + 0.45f * (std::sin(millis() * 0.006f) * 0.5f + 0.5f);
+  } else if (!state.standby && visualState == TaskVisualState::Error) {
+    pulse = 0.35f + 0.65f * (std::sin(millis() * 0.012f) * 0.5f + 0.5f);
   }
+  const uint16_t baseColor = light.brightness <= 0.01f
+                                 ? 0x8410
+                                 : rgb888To565(light.color, displayBrightness);
+  const uint16_t color = light.brightness <= 0.01f
+                             ? 0x4208
+                             : rgb888To565(light.color, displayBrightness * pulse);
+  char title[12];
+  snprintf(title, sizeof(title), "AGENT %d", i + 1);
+  const char* status = taskStatusLabel(visualState);
+  const bool pressed = touchActive && activeAction.agent == i;
+  drawButton(button.x, button.y, button.width, button.height, title, color,
+             pressed, status, spacious, spacious ? 5 : 1,
+             spacious ? baseColor : kText,
+             spacious ? baseColor : kMuted);
+  if (spacious) {
+    canvas.fillCircle(button.x + 12 * layout.textScale,
+                      button.y + button.height * 72 / 100,
+                      3 * layout.textScale, color);
+  } else {
+    canvas.fillCircle(button.x + button.width - 12 * layout.textScale,
+                      button.y + 12 * layout.textScale,
+                      4 * layout.textScale, color);
+  }
+}
+
+void drawTasks(const Rect& bounds, int columns = 3, bool spacious = false) {
+  for (int i = 0; i < 6; ++i) drawTask(bounds, i, columns, spacious);
 }
 
 void drawCommands(const Rect& bounds, int columns = 3, bool controlOrder = false,
@@ -522,10 +544,17 @@ void renderScreen() {
 }
 
 void drawScreen() {
+  const uint32_t renderStartUs = micros();
   renderScreen();
+  const uint32_t transferStartUs = micros();
   canvas.pushSprite(0, 0);
+  const uint32_t transferEndUs = micros();
   lastDrawMs = millis();
 #if defined(CODEX_BOARD_TAB5)
+  fullRenderTotalUs += transferStartUs - renderStartUs;
+  ++fullRenderCount;
+  displayTransferTotalUs += transferEndUs - transferStartUs;
+  ++displayTransferCount;
   drawPending = false;
 #endif
 }
@@ -560,15 +589,47 @@ Rect taskButtonRect(int agent) {
 }
 
 void redrawTaskRegions(const std::array<bool, 6>& redraw) {
-  renderScreen();
+  Rect tasks;
+  Rect commands;
+  controlBounds(tasks, commands);
   for (int i = 0; i < 6; ++i) {
-    if (redraw[i] && !pushCanvasRegion(taskButtonRect(i))) {
+    if (!redraw[i]) continue;
+    const uint32_t renderStartUs = micros();
+    drawTask(tasks, i, 2, true);
+    const uint32_t transferStartUs = micros();
+    if (!pushCanvasRegion(taskButtonRect(i))) {
       drawScreen();
       return;
     }
+    const uint32_t transferEndUs = micros();
+    tileRenderTotalUs += transferStartUs - renderStartUs;
+    ++tileRenderCount;
+    displayTransferTotalUs += transferEndUs - transferStartUs;
+    ++displayTransferCount;
   }
   lastDrawMs = millis();
   drawPending = false;
+}
+
+void reportRenderTimings() {
+  const uint32_t now = millis();
+  if (renderTimingWindowMs == 0) renderTimingWindowMs = now;
+  if (now - renderTimingWindowMs < 5000) return;
+  Serial.printf(
+      "Render timing full=%lu/%luus tile=%lu/%luus transfer=%lu/%luus\n",
+      static_cast<unsigned long>(fullRenderCount),
+      static_cast<unsigned long>(
+          fullRenderCount ? fullRenderTotalUs / fullRenderCount : 0),
+      static_cast<unsigned long>(tileRenderCount),
+      static_cast<unsigned long>(
+          tileRenderCount ? tileRenderTotalUs / tileRenderCount : 0),
+      static_cast<unsigned long>(displayTransferCount),
+      static_cast<unsigned long>(displayTransferCount
+                                     ? displayTransferTotalUs / displayTransferCount
+                                     : 0));
+  renderTimingWindowMs = now;
+  fullRenderTotalUs = tileRenderTotalUs = displayTransferTotalUs = 0;
+  fullRenderCount = tileRenderCount = displayTransferCount = 0;
 }
 
 void redrawTaskRegion(int agent) {
@@ -821,6 +882,8 @@ void updateBattery() {
     sampledLevel = levels[validLevelCount / 2];
   }
 
+  const int batteryVoltageMv = M5.Power.getBatteryVoltage();
+  const int batteryCurrentMa = M5.Power.getBatteryCurrent();
   const bool sampledCharging = M5.Power.isCharging();
   const bool previousCharging = batteryCharging;
   if (!batteryChargingInitialized) {
@@ -850,17 +913,28 @@ void updateBattery() {
     batteryLevel = sampledLevel;
     pendingBatterySamples = 0;
   }
-  const bool changed = batteryLevel != previousLevel;
-  Serial.printf("Battery samples=%u range=%d..%d median=%d level=%d charging=%s%s\n",
+  const bool previousExternalPower = externalPower;
+  const bool fullScaleWithoutBatteryCurrent =
+      sampledLevel == 100 && batteryVoltageMv >= 8300 &&
+      abs(batteryCurrentMa) <= kExternalPowerCurrentThresholdMa;
+  externalPower = batteryLevel < 0 || fullScaleWithoutBatteryCurrent;
+  const bool changed = batteryLevel != previousLevel ||
+                       externalPower != previousExternalPower;
+  Serial.printf("Battery samples=%u range=%d..%d median=%d level=%d voltage=%dmV "
+                "current=%dmA charging=%s power=%s%s\n",
                 static_cast<unsigned>(validLevelCount), minimumLevel,
                 maximumLevel, sampledLevel,
-                batteryLevel, batteryCharging ? "yes" : "no",
+                batteryLevel, batteryVoltageMv, batteryCurrentMa,
+                batteryCharging ? "yes" : "no",
+                externalPower ? "usb" : "battery",
                 sampledLevel < 0 ? " retained" : "");
   if ((changed || batteryCharging != previousCharging) &&
       canvas.getBuffer() != nullptr) {
     drawScreen();
   }
-  if (batteryLevel >= 0) {
+  if (externalPower) {
+    codex.setBattery(100, false);
+  } else if (batteryLevel >= 0) {
     codex.setBattery(static_cast<uint8_t>(batteryLevel), batteryCharging);
   }
 #else
@@ -1043,6 +1117,7 @@ void loop() {
 
 #if defined(CODEX_BOARD_TAB5)
   if (drawPending && millis() - lastDrawMs >= 24) drawScreen();
+  reportRenderTimings();
 #endif
 
   updateBattery();
