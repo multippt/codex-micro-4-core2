@@ -149,7 +149,11 @@ class CodexMicroBle::OutputCallbacks final : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const auto value = characteristic->getValue();
     Serial.printf("BLE output write bytes=%u\n", static_cast<unsigned>(value.length()));
+#if defined(CODEX_BOARD_STICKS3)
+    owner_.queueOutput(reinterpret_cast<const uint8_t*>(value.c_str()), value.length());
+#else
     owner_.onOutput(reinterpret_cast<const uint8_t*>(value.c_str()), value.length());
+#endif
   }
 
  private:
@@ -158,6 +162,12 @@ class CodexMicroBle::OutputCallbacks final : public BLECharacteristicCallbacks {
 
 void CodexMicroBle::begin() {
   stateMutex_ = xSemaphoreCreateMutex();
+#if defined(CODEX_BOARD_STICKS3)
+  outputQueue_ = xQueueCreate(8, sizeof(PendingOutputReport));
+  if (outputQueue_ == nullptr) {
+    Serial.println("BLE output queue allocation failed");
+  }
+#endif
 #if defined(CODEX_BOARD_TAB5)
   responseQueue_ = xQueueCreate(8, sizeof(PendingMessage));
   if (responseQueue_ == nullptr) {
@@ -289,6 +299,14 @@ void CodexMicroBle::sendJoystick(float angle, float distance) {
 }
 
 void CodexMicroBle::maintain() {
+#if defined(CODEX_BOARD_STICKS3)
+  if (outputQueue_ != nullptr) {
+    PendingOutputReport report;
+    while (xQueueReceive(outputQueue_, &report, 0) == pdTRUE) {
+      onOutput(report.data, report.length);
+    }
+  }
+#endif
 #if defined(CODEX_BOARD_TAB5)
   if (responseQueue_ == nullptr) return;
   PendingMessage pending;
@@ -297,6 +315,18 @@ void CodexMicroBle::maintain() {
   }
 #endif
 }
+
+#if defined(CODEX_BOARD_STICKS3)
+void CodexMicroBle::queueOutput(const uint8_t* data, size_t length) {
+  if (outputQueue_ == nullptr || data == nullptr || length == 0) return;
+  PendingOutputReport report;
+  report.length = static_cast<uint8_t>(min<size_t>(length, sizeof(report.data)));
+  memcpy(report.data, data, report.length);
+  if (xQueueSend(outputQueue_, &report, 0) != pdTRUE) {
+    Serial.println("BLE output queue full; report dropped");
+  }
+}
+#endif
 
 BondClearResult CodexMicroBle::clearBonds() {
   clearingBonds_ = true;
@@ -413,6 +443,9 @@ void CodexMicroBle::onConnected(bool connected) {
   notifyFailureCount_.store(0);
   initializationMethods_ = 0;
   initializationRetries_ = 0;
+#if defined(CODEX_BOARD_STICKS3)
+  if (outputQueue_ != nullptr) xQueueReset(outputQueue_);
+#endif
 #if defined(CODEX_BOARD_TAB5)
   if (responseQueue_ != nullptr) xQueueReset(responseQueue_);
 #endif

@@ -5,6 +5,7 @@
 using codex_micro::StickButtonController;
 using codex_micro::StickGesture;
 using codex_micro::StickPage;
+using codex_micro::StickPageSelection;
 using codex_micro::StickUiController;
 
 void setUp() {}
@@ -96,6 +97,37 @@ void test_unpair_defaults_to_cancel() {
   TEST_ASSERT_EQUAL_UINT8(0, ui.selection());
 }
 
+void test_next_arrow_persists_across_all_pages() {
+  StickUiController ui;
+  const uint8_t destinationCounts[] = {8, 9, 4, 8};
+  for (uint8_t count : destinationCounts) {
+    ui.changePage(1, StickPageSelection::NextArrow);
+    TEST_ASSERT_EQUAL_UINT8(count, ui.itemCount());
+    TEST_ASSERT_EQUAL_UINT8(count - 1, ui.selection());
+  }
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StickPage::Agents),
+                        static_cast<int>(ui.page()));
+}
+
+void test_previous_arrow_persists_across_all_pages() {
+  StickUiController ui;
+  const uint8_t destinationCounts[] = {4, 9, 8, 8};
+  for (uint8_t count : destinationCounts) {
+    ui.changePage(-1, StickPageSelection::PreviousArrow);
+    TEST_ASSERT_EQUAL_UINT8(count, ui.itemCount());
+    TEST_ASSERT_EQUAL_UINT8(count - 2, ui.selection());
+  }
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(StickPage::Agents),
+                        static_cast<int>(ui.page()));
+}
+
+void test_default_page_change_selects_first_action() {
+  StickUiController ui;
+  ui.move(-1);
+  ui.changePage(1);
+  TEST_ASSERT_EQUAL_UINT8(0, ui.selection());
+}
+
 void test_urgent_state_classification() {
   TEST_ASSERT_FALSE(codex_micro::stickAgentUrgent(0));
   TEST_ASSERT_FALSE(codex_micro::stickAgentUrgent(1));
@@ -113,6 +145,9 @@ int main(int, char**) {
   RUN_TEST(test_page_counts_and_wrap);
   RUN_TEST(test_agent_selection_is_isolated_from_other_pages);
   RUN_TEST(test_unpair_defaults_to_cancel);
+  RUN_TEST(test_next_arrow_persists_across_all_pages);
+  RUN_TEST(test_previous_arrow_persists_across_all_pages);
+  RUN_TEST(test_default_page_change_selects_first_action);
   RUN_TEST(test_urgent_state_classification);
   return UNITY_END();
 }

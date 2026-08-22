@@ -321,8 +321,8 @@ void drawScreen() {
   lastDrawMs = millis();
 }
 
-void changePage(int8_t delta) {
-  ui.changePage(delta);
+void changePage(int8_t delta, codex_micro::StickPageSelection destination) {
+  ui.changePage(delta, destination);
   drawScreen();
 }
 
@@ -384,8 +384,12 @@ void activateSelection() {
   }
 
   const uint8_t selected = ui.selection();
-  if (selected == ui.itemCount() - 2) return changePage(-1);
-  if (selected == ui.itemCount() - 1) return changePage(1);
+  if (selected == ui.itemCount() - 2) {
+    return changePage(-1, codex_micro::StickPageSelection::PreviousArrow);
+  }
+  if (selected == ui.itemCount() - 1) {
+    return changePage(1, codex_micro::StickPageSelection::NextArrow);
+  }
 
   switch (ui.page()) {
     case StickPage::Agents:

@@ -147,7 +147,8 @@ this firmware.
 StickS3 uses a portrait, non-touch four-page interface. **Agents** shows six
 numbered tiles in a 2 x 3 grid; **Commands** uses large labels plus tick/cross
 icons; **Navigate** provides directions and dial actions; **Config** provides
-Unpair and Mute. Select the bottom `<` or `>` tiles to change pages.
+Unpair and Mute. Select the bottom `<` or `>` tiles to change pages; the same
+arrow remains selected on the destination page for quick repeated navigation.
 
 Press the main button (`BtnA`) to activate the selected tile. Single-press the
 side button (`BtnB`) for the next tile, double-press within 350 ms for the

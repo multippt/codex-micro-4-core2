@@ -7,6 +7,7 @@ namespace codex_micro {
 
 enum class StickPage : uint8_t { Agents, Commands, Navigate, Config, Count };
 enum class StickGesture : uint8_t { None, Next, Previous, NextPage };
+enum class StickPageSelection : uint8_t { FirstAction, PreviousArrow, NextArrow };
 
 class StickButtonController {
  public:
@@ -85,13 +86,21 @@ class StickUiController {
     if (page_ == StickPage::Agents && selection_ < 6) selectedAgent_ = selection_;
   }
 
-  void changePage(int8_t delta) {
+  void changePage(
+      int8_t delta,
+      StickPageSelection destination = StickPageSelection::FirstAction) {
     int next = static_cast<int>(page_) + delta;
     const int count = static_cast<int>(StickPage::Count);
     while (next < 0) next += count;
     page_ = static_cast<StickPage>(next % count);
-    selection_ = page_ == StickPage::Agents ? selectedAgent_ : 0;
     confirmingUnpair_ = false;
+    if (destination == StickPageSelection::PreviousArrow) {
+      selection_ = itemCount() - 2;
+    } else if (destination == StickPageSelection::NextArrow) {
+      selection_ = itemCount() - 1;
+    } else {
+      selection_ = page_ == StickPage::Agents ? selectedAgent_ : 0;
+    }
   }
 
   void beginUnpairConfirmation() {

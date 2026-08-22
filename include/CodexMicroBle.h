@@ -69,6 +69,9 @@ class CodexMicroBle {
   void onSecurity(bool encrypted, bool authenticated, bool bonded, bool authorized);
   void onSubscribed(uint16_t value);
   void onNotifyStatus(int status, uint32_t code);
+#if defined(CODEX_BOARD_STICKS3)
+  void queueOutput(const uint8_t* data, size_t length);
+#endif
   void onOutput(const uint8_t* data, size_t length);
   void handleRpc(const JsonDocument& request);
   void sendResult(JsonVariantConst id, JsonVariantConst result);
@@ -90,6 +93,13 @@ class CodexMicroBle {
     char data[kPendingMessageCapacity] = {};
   };
   QueueHandle_t responseQueue_ = nullptr;
+#endif
+#if defined(CODEX_BOARD_STICKS3)
+  struct PendingOutputReport {
+    uint8_t length = 0;
+    uint8_t data[64] = {};
+  };
+  QueueHandle_t outputQueue_ = nullptr;
 #endif
   CodexMicroState state_;
   std::array<ThreadLight, 6> cachedVisibleThreads_;
