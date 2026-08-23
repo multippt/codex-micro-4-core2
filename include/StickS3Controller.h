@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace codex_micro {
@@ -72,7 +73,7 @@ class StickUiController {
       case StickPage::Agents: return 8;
       case StickPage::Commands: return 8;
       case StickPage::Navigate: return 9;
-      case StickPage::Config: return 4;
+      case StickPage::Config: return 5;
       default: return 0;
     }
   }
@@ -105,7 +106,7 @@ class StickUiController {
 
   void beginUnpairConfirmation() {
     confirmingUnpair_ = true;
-    selection_ = 0;
+    selection_ = 1;
   }
   void cancelUnpairConfirmation() {
     confirmingUnpair_ = false;
@@ -128,9 +129,91 @@ class StickUiController {
   bool confirmingUnpair_ = false;
 };
 
-inline bool stickAgentUrgent(uint8_t visualState) {
-  // Matches Waiting=2 and Error=4 in the firmware visual-state enum.
-  return visualState == 2 || visualState == 4;
+class StickNotificationController {
+ public:
+  static constexpr size_t kAgentCount = 6;
+  static constexpr uint8_t kActive = 1;
+  static constexpr uint8_t kWaiting = 2;
+  static constexpr uint8_t kComplete = 3;
+  static constexpr uint8_t kError = 4;
+
+  // Returns one notification request for the whole batch, even if several
+  // agents enter attention states at the same time.
+  bool update(const uint8_t* states, size_t count) {
+    if (states == nullptr) return false;
+    const size_t limit = count < kAgentCount ? count : kAgentCount;
+    bool notify = false;
+    for (size_t i = 0; i < limit; ++i) {
+      const uint8_t current = states[i];
+      if (!initialized_) {
+        alerted_[i] = current != kActive;
+      } else if (current == kActive) {
+        alerted_[i] = false;
+      } else if (isAttentionState(current) && current != previous_[i] &&
+                 !alerted_[i]) {
+        alerted_[i] = true;
+        notify = true;
+      }
+      previous_[i] = current;
+    }
+    initialized_ = true;
+    return notify;
+  }
+
+  bool initialized() const { return initialized_; }
+
+ private:
+  static bool isAttentionState(uint8_t state) {
+    return state == kWaiting || state == kComplete || state == kError;
+  }
+
+  uint8_t previous_[kAgentCount] = {};
+  bool alerted_[kAgentCount] = {};
+  bool initialized_ = false;
+};
+
+class StickVolumeController {
+ public:
+  static constexpr uint8_t kMinimumLevel = 0;
+  static constexpr uint8_t kMaximumLevel = 10;
+  static constexpr uint8_t kDefaultLevel = 4;
+
+  explicit StickVolumeController(uint8_t level = kDefaultLevel)
+      : level_(clamp(level)) {}
+
+  uint8_t level() const { return level_; }
+  bool active() const { return level_ > kMinimumLevel; }
+  uint8_t hardwareVolume() const { return toHardwareVolume(level_); }
+
+  bool set(uint8_t level) {
+    const uint8_t next = clamp(level);
+    if (next == level_) return false;
+    level_ = next;
+    return true;
+  }
+
+  bool adjust(int8_t delta) {
+    int next = static_cast<int>(level_) + delta;
+    if (next < kMinimumLevel) next = kMinimumLevel;
+    if (next > kMaximumLevel) next = kMaximumLevel;
+    return set(static_cast<uint8_t>(next));
+  }
+
+  static uint8_t clamp(uint8_t level) {
+    return level > kMaximumLevel ? kMaximumLevel : level;
+  }
+
+  static uint8_t toHardwareVolume(uint8_t level) {
+    return static_cast<uint8_t>(clamp(level) * 255 / kMaximumLevel);
+  }
+
+ private:
+  uint8_t level_;
+};
+
+inline bool stickShouldPlayNotification(bool requested, bool soundEnabled,
+                                        bool speakerReady) {
+  return requested && soundEnabled && speakerReady;
 }
 
 }  // namespace codex_micro

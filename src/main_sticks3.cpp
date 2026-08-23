@@ -34,8 +34,11 @@ constexpr int kHeaderHeight = 24;
 constexpr int kFooterHeight = 28;
 constexpr int kGap = 3;
 constexpr uint32_t kNoticeMs = 3000;
+constexpr float kNotificationFrequency = 1000.0f;
+constexpr uint32_t kNotificationDurationMs = 90;
 constexpr char kPreferenceNamespace[] = "codex-micro";
 constexpr char kSoundKey[] = "sound";
+constexpr char kVolumeKey[] = "volume";
 constexpr char kPendingUnpairKey[] = "pending-unpair";
 
 enum class TaskVisualState : uint8_t { Idle, Active, Waiting, Complete, Error };
@@ -51,7 +54,8 @@ M5Canvas canvas(&M5.Display);
 Preferences preferences;
 codex_micro::StickButtonController buttonB;
 codex_micro::StickUiController ui;
-bool soundEnabled = true;
+codex_micro::StickNotificationController notifications;
+codex_micro::StickVolumeController volume;
 bool speakerReady = false;
 bool unpairBusy = false;
 int batteryLevel = 100;
@@ -131,6 +135,20 @@ void drawBattery(int x, int y) {
   }
 }
 
+void drawSpeaker(int x, int y) {
+  const bool active = volume.active();
+  const uint16_t color = active ? kText : kMuted;
+  canvas.fillTriangle(x - 6, y - 3, x - 2, y - 3, x - 2, y + 3, color);
+  canvas.fillTriangle(x - 2, y - 3, x + 3, y - 7, x + 3, y + 7, color);
+  if (active) {
+    canvas.drawArc(x + 3, y, 6, 5, 300, 60, color);
+    canvas.drawArc(x + 3, y, 9, 8, 300, 60, color);
+  } else {
+    canvas.drawLine(x + 5, y - 5, x + 11, y + 5, color);
+    canvas.drawLine(x + 11, y - 5, x + 5, y + 5, color);
+  }
+}
+
 const char* pageTitle() {
   if (ui.confirmingUnpair()) return "UNPAIR?";
   switch (ui.page()) {
@@ -148,6 +166,7 @@ void drawHeader() {
   canvas.setTextSize(1);
   canvas.setTextColor(kText);
   canvas.drawString(pageTitle(), 4, kHeaderHeight / 2);
+  drawSpeaker(canvas.width() - 54, kHeaderHeight / 2);
   drawBluetooth(canvas.width() - 35, kHeaderHeight / 2,
                 state.connected ? kBlue : kMuted);
   drawBattery(canvas.width() - 25, kHeaderHeight / 2);
@@ -279,25 +298,39 @@ void drawNavigate() {
 }
 
 void drawConfig() {
-  const int bottom = canvas.height() - kFooterHeight - 3;
-  const Rect unpair = gridRect(0, kHeaderHeight + 3, bottom, 1, 2);
-  const Rect mute = gridRect(1, kHeaderHeight + 3, bottom, 1, 2);
+  const int top = kHeaderHeight + 3;
+  const Rect unpair{3, top, canvas.width() - 6, 88};
+  constexpr int volumeButtonSize = 44;
+  const int volumeY = unpair.y + unpair.h + 18;
+  const Rect decrease{3, volumeY, volumeButtonSize, volumeButtonSize};
+  const Rect increase{canvas.width() - 3 - volumeButtonSize, volumeY,
+                      volumeButtonSize, volumeButtonSize};
   drawTile(unpair, 0, "UNPAIR");
-  drawTile(mute, 1, soundEnabled ? "MUTE" : "UNMUTE");
-  drawFooter(2, 3);
+  drawTile(decrease, 1, "-");
+  drawTile(increase, 2, "+");
+  char volumeText[4];
+  snprintf(volumeText, sizeof(volumeText), "%u", volume.level());
+  drawText(volumeText, canvas.width() / 2, volumeY + volumeButtonSize / 2,
+           2, volume.active() ? kText : kMuted);
+  drawFooter(3, 4);
 }
 
 void drawUnpairConfirmation() {
-  const int top = 62;
-  const int height = 112;
-  const Rect cancel{5, top, (canvas.width() - 13) / 2, height};
-  const Rect confirm{cancel.x + cancel.w + 3, top,
-                     canvas.width() - cancel.w - 13, height};
+  constexpr int buttonSize = 58;
+  constexpr int buttonGap = 5;
+  const int groupWidth = buttonSize * 2 + buttonGap;
+  const int left = (canvas.width() - groupWidth) / 2;
+  const int top = 70;
+  const Rect cancel{left, top, buttonSize, buttonSize};
+  const Rect confirm{left + buttonSize + buttonGap, top, buttonSize,
+                     buttonSize};
   drawTile(cancel, 0, nullptr, kRed, 0x3000);
   drawTile(confirm, 1, nullptr, kGreen, 0x0180);
   drawCross(cancel, kText);
   drawTick(confirm, kText);
-  drawText("CONFIRM", canvas.width() / 2, 198, 1, kMuted);
+  drawText("NO", cancel.x + cancel.w / 2, top + buttonSize + 15, 1, kMuted);
+  drawText("YES", confirm.x + confirm.w / 2, top + buttonSize + 15, 1,
+           kMuted);
 }
 
 void drawNotice() {
@@ -367,12 +400,25 @@ void tapKey(const char* key, int8_t agent = -1) {
   codex.sendKey(key, 0, agent);
 }
 
-void toggleSound() {
-  soundEnabled = !soundEnabled;
+void changeVolume(int8_t delta) {
+  if (!volume.adjust(delta)) {
+    Serial.printf("StickS3 volume unchanged level=%u\n", volume.level());
+    return;
+  }
+  const uint8_t hardwareVolume = volume.hardwareVolume();
+  M5.Speaker.setVolume(hardwareVolume);
   preferences.begin(kPreferenceNamespace, false);
-  preferences.putBool(kSoundKey, soundEnabled);
+  preferences.putUChar(kVolumeKey, volume.level());
+  preferences.putBool(kSoundKey, volume.active());
   preferences.end();
-  Serial.printf("StickS3 notifications %s\n", soundEnabled ? "enabled" : "muted");
+  const bool submitted = volume.active() && speakerReady &&
+                         M5.Speaker.tone(kNotificationFrequency,
+                                         kNotificationDurationMs);
+  Serial.printf(
+      "StickS3 volume level=%u hardware=%u active=%s preview_submitted=%s "
+      "speaker_ready=%s\n",
+      volume.level(), hardwareVolume, volume.active() ? "yes" : "no",
+      submitted ? "yes" : "no", speakerReady ? "yes" : "no");
 }
 
 void finishUnpair() {
@@ -439,7 +485,8 @@ void activateSelection() {
       break;
     case StickPage::Config:
       if (selected == 0) ui.beginUnpairConfirmation();
-      else if (selected == 1) toggleSound();
+      else if (selected == 1) changeVolume(-1);
+      else if (selected == 2) changeVolume(1);
       drawScreen();
       break;
     default: break;
@@ -448,33 +495,48 @@ void activateSelection() {
 
 void updateRecentAgent(const CodexMicroState& latest) {
   int newest = -1;
-  int newestUrgent = -1;
+  int newestAttention = -1;
   uint32_t newestOrder = 0;
-  uint32_t newestUrgentOrder = 0;
-  bool attention = false;
+  uint32_t newestAttentionOrder = 0;
+  uint8_t visualStates[6] = {};
   for (int i = 0; i < 6; ++i) {
+    visualStates[i] = static_cast<uint8_t>(taskVisualState(latest.threads[i]));
     if (latest.threadUpdateOrder[i] == state.threadUpdateOrder[i]) continue;
     const uint32_t order = latest.threadUpdateOrder[i];
-    const auto visual = taskVisualState(latest.threads[i]);
     if (order >= newestOrder) {
       newestOrder = order;
       newest = i;
     }
-    if (codex_micro::stickAgentUrgent(static_cast<uint8_t>(visual)) &&
-        order >= newestUrgentOrder) {
-      newestUrgentOrder = order;
-      newestUrgent = i;
-      attention = true;
+    const uint8_t visual = visualStates[i];
+    if ((visual == codex_micro::StickNotificationController::kWaiting ||
+         visual == codex_micro::StickNotificationController::kComplete ||
+         visual == codex_micro::StickNotificationController::kError) &&
+        order >= newestAttentionOrder) {
+      newestAttentionOrder = order;
+      newestAttention = i;
     }
   }
-  const int chosen = newestUrgent >= 0 ? newestUrgent : newest;
+  const int chosen = newestAttention >= 0 ? newestAttention : newest;
   if (chosen >= 0) {
     const StickPage previousPage = ui.page();
     const uint8_t previousSelection = ui.selection();
     ui.noteAgent(static_cast<uint8_t>(chosen));
     logSelectorChange("host-activity", previousPage, previousSelection);
   }
-  if (attention && soundEnabled && speakerReady) M5.Speaker.tone(1000, 90);
+  const bool baselineAlreadySynchronized = notifications.initialized();
+  const bool notify = notifications.update(visualStates, 6);
+  if (notify) {
+    const bool submitted = codex_micro::stickShouldPlayNotification(
+                               notify, volume.active(), speakerReady) &&
+                           M5.Speaker.tone(kNotificationFrequency,
+                                           kNotificationDurationMs);
+    Serial.printf(
+        "StickS3 agent attention notification sound=%s speaker_ready=%s submitted=%s\n",
+        volume.active() ? "enabled" : "muted", speakerReady ? "yes" : "no",
+        submitted ? "yes" : "no");
+  } else if (!baselineAlreadySynchronized) {
+    Serial.println("StickS3 agent notification baseline synchronized");
+  }
 }
 
 void updateBattery() {
@@ -501,19 +563,42 @@ void setup() {
   Serial.println(kBootMessage);
 
   preferences.begin(kPreferenceNamespace, false);
-  soundEnabled = preferences.getBool(kSoundKey, true);
+  if (preferences.isKey(kVolumeKey)) {
+    volume.set(preferences.getUChar(
+        kVolumeKey, codex_micro::StickVolumeController::kDefaultLevel));
+  } else {
+    const bool legacySoundEnabled = preferences.getBool(kSoundKey, true);
+    volume.set(legacySoundEnabled
+                   ? codex_micro::StickVolumeController::kDefaultLevel
+                   : codex_micro::StickVolumeController::kMinimumLevel);
+    preferences.putUChar(kVolumeKey, volume.level());
+    preferences.putBool(kSoundKey, volume.active());
+  }
   const bool pendingUnpair = preferences.getBool(kPendingUnpairKey, false);
   if (pendingUnpair) preferences.remove(kPendingUnpairKey);
   preferences.end();
 
   auto config = M5.config();
   config.clear_display = true;
+  config.internal_spk = true;
   M5.begin(config);
   M5.Display.setRotation(kDisplayRotation);
   M5.Display.setBrightness(kDisplayBrightness);
   M5.Display.setTextWrap(false);
   speakerReady = M5.Speaker.begin();
-  if (speakerReady) M5.Speaker.setVolume(96);
+  if (speakerReady) M5.Speaker.setVolume(volume.hardwareVolume());
+  const auto speakerConfig = M5.Speaker.config();
+  Serial.printf(
+      "StickS3 audio board=%d enabled=%s running=%s begin=%s sound=%s "
+      "port=%d mck=%d bck=%d ws=%d data=%d rate=%lu stereo=%s volume=%u\n",
+      static_cast<int>(M5.getBoard()), M5.Speaker.isEnabled() ? "yes" : "no",
+      M5.Speaker.isRunning() ? "yes" : "no", speakerReady ? "ok" : "failed",
+      volume.active() ? "enabled" : "muted", static_cast<int>(speakerConfig.i2s_port),
+      static_cast<int>(speakerConfig.pin_mck), static_cast<int>(speakerConfig.pin_bck),
+      static_cast<int>(speakerConfig.pin_ws),
+      static_cast<int>(speakerConfig.pin_data_out),
+      static_cast<unsigned long>(speakerConfig.sample_rate),
+      speakerConfig.stereo ? "yes" : "no", volume.hardwareVolume());
 
   canvas.setColorDepth(16);
   if (canvas.createSprite(M5.Display.width(), M5.Display.height()) == nullptr) {
