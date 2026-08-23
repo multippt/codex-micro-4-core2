@@ -94,6 +94,11 @@ uint16_t taskColor(const ThreadLight& light) {
   return rgb888To565(light.color, light.brightness * pulse);
 }
 
+uint16_t taskBaseColor(const ThreadLight& light) {
+  if (light.brightness <= 0.01f) return kMuted;
+  return rgb888To565(light.color, light.brightness);
+}
+
 void drawText(const char* text, int x, int y, int size = 1,
               uint16_t color = kText) {
   canvas.setTextDatum(middle_center);
@@ -189,7 +194,8 @@ void drawArrow(const Rect& r, int dx, int dy, uint16_t color) {
 }
 
 void drawTile(const Rect& r, uint8_t index, const char* label = nullptr,
-              uint16_t border = kMuted, uint16_t fill = kPanel) {
+              uint16_t border = kMuted, uint16_t fill = kPanel,
+              uint16_t labelColor = kText) {
   canvas.fillRoundRect(r.x, r.y, r.w, r.h, 4, fill);
   canvas.drawRoundRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 3, border);
   if (ui.selection() == index) {
@@ -198,7 +204,8 @@ void drawTile(const Rect& r, uint8_t index, const char* label = nullptr,
   }
   if (label != nullptr) {
     drawText(label, r.x + r.w / 2, r.y + r.h / 2,
-             strlen(label) <= 2 && r.h > 45 ? 3 : (r.h > 38 ? 2 : 1));
+             strlen(label) <= 2 && r.h > 45 ? 3 : (r.h > 38 ? 2 : 1),
+             labelColor);
   }
 }
 
@@ -228,8 +235,10 @@ void drawAgents() {
   for (int i = 0; i < 6; ++i) {
     const Rect r = gridRect(i, kHeaderHeight + 3, bottom, 2, 3);
     char number[2] = {static_cast<char>('1' + i), '\0'};
-    const uint16_t status = taskColor(state.threads[i]);
-    drawTile(r, i, number, status, kPanel);
+    const ThreadLight& light = state.threads[i];
+    const uint16_t status = taskColor(light);
+    const uint16_t numberColor = taskBaseColor(light);
+    drawTile(r, i, number, status, kPanel, numberColor);
   }
   drawFooter(6, 7);
 }
