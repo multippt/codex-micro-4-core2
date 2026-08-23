@@ -8,6 +8,12 @@
 #include <BLEDevice.h>
 #include <BLESecurity.h>
 #include <BLEUtils.h>
+#include <Preferences.h>
+
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+#include <USB.h>
+#include <USBHID.h>
+#endif
 
 #include "BoardProfile.h"
 
@@ -19,6 +25,8 @@ namespace {
 
 constexpr char kDeviceName[] = "Codex Micro";
 constexpr char kManufacturer[] = "Work Louder";
+constexpr char kPreferenceNamespace[] = "codex-micro";
+constexpr char kTransportPreference[] = "transport";
 constexpr size_t kPayloadSize = 61;
 constexpr size_t kReportBodySize = 63;
 #if defined(CODEX_BOARD_STICKS3)
@@ -53,6 +61,35 @@ const uint8_t kReportMap[] = {
 };
 
 }  // namespace
+
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+class CodexMicroBle::UsbHidDevice final : public USBHIDDevice {
+ public:
+  explicit UsbHidDevice(CodexMicroBle& owner) : owner_(owner) {
+    hid_.addDevice(this, sizeof(kReportMap));
+  }
+
+  void begin() { hid_.begin(); }
+  bool ready() { return hid_.ready(); }
+  bool send(const uint8_t* report) {
+    return hid_.SendReport(kReportId, report, kReportBodySize);
+  }
+
+  uint16_t _onGetDescriptor(uint8_t* buffer) override {
+    memcpy(buffer, kReportMap, sizeof(kReportMap));
+    return sizeof(kReportMap);
+  }
+
+  void _onOutput(uint8_t reportId, const uint8_t* buffer,
+                 uint16_t length) override {
+    if (reportId == kReportId) owner_.queueOutput(buffer, length);
+  }
+
+ private:
+  CodexMicroBle& owner_;
+  USBHID hid_;
+};
+#endif
 
 class CodexSecurityCallbacks final : public BLESecurityCallbacks {
  public:
@@ -177,9 +214,48 @@ class CodexMicroBle::OutputCallbacks final : public BLECharacteristicCallbacks {
   CodexMicroBle& owner_;
 };
 
+TransportMode CodexMicroBle::loadMode() {
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+  Preferences preferences;
+  preferences.begin(kPreferenceNamespace, true);
+  const uint8_t stored = preferences.getUChar(
+      kTransportPreference, static_cast<uint8_t>(TransportMode::Bluetooth));
+  preferences.end();
+  return normalizeTransportMode(stored);
+#else
+  return TransportMode::Bluetooth;
+#endif
+}
+
+bool CodexMicroBle::saveMode(TransportMode mode) {
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+  Preferences preferences;
+  preferences.begin(kPreferenceNamespace, false);
+  const bool saved = preferences.putUChar(
+                         kTransportPreference, static_cast<uint8_t>(mode)) ==
+                     sizeof(uint8_t);
+  preferences.end();
+  return saved;
+#else
+  return mode == TransportMode::Bluetooth;
+#endif
+}
+
 void CodexMicroBle::begin() {
+  mode_ = loadMode();
+  state_.transport = mode_;
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+  if (mode_ == TransportMode::Usb) {
+    beginUsb();
+    return;
+  }
+#endif
+  beginBle();
+}
+
+void CodexMicroBle::beginBle() {
   stateMutex_ = xSemaphoreCreateMutex();
-#if defined(CODEX_BOARD_STICKS3)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
   outputQueue_ = xQueueCreate(8, sizeof(PendingOutputReport));
   if (outputQueue_ == nullptr) {
     Serial.println("BLE output queue allocation failed");
@@ -292,10 +368,41 @@ void CodexMicroBle::begin() {
       kVendorId, kProductId, kReportId);
 }
 
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+void CodexMicroBle::beginUsb() {
+  stateMutex_ = xSemaphoreCreateMutex();
+  outputQueue_ = xQueueCreate(8, sizeof(PendingOutputReport));
+  if (stateMutex_ == nullptr || outputQueue_ == nullptr) {
+    Serial.println("USB transport allocation failed");
+    return;
+  }
+
+  usbHid_ = new UsbHidDevice(*this);
+  USB.VID(kVendorId);
+  USB.PID(kProductId);
+  USB.firmwareVersion(0x0100);
+  USB.productName(kDeviceName);
+  USB.manufacturerName(kManufacturer);
+  usbHid_->begin();
+  if (!USB.begin()) {
+    Serial.println("USB vendor HID start failed");
+    return;
+  }
+  xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  state_.transport = TransportMode::Usb;
+  state_.secured = true;
+  state_.diagnostic = "WAITING FOR USB";
+  state_.dirty = true;
+  xSemaphoreGive(stateMutex_);
+  Serial.printf("USB vendor HID ready VID=%04X PID=%04X usage=FF00 report=%u\n",
+                kVendorId, kProductId, kReportId);
+}
+#endif
+
 void CodexMicroBle::setBattery(uint8_t percentage, bool charging) {
   batteryPercentage_ = constrain(percentage, 0, 100);
   charging_ = charging;
-  if (hid_ != nullptr && connected()) {
+  if (mode_ == TransportMode::Bluetooth && hid_ != nullptr && connected()) {
     hid_->setBatteryLevel(batteryPercentage_);
   }
 }
@@ -329,7 +436,10 @@ void CodexMicroBle::sendJoystick(float angle, float distance) {
 }
 
 void CodexMicroBle::maintain() {
-#if defined(CODEX_BOARD_STICKS3)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+  if (mode_ == TransportMode::Usb && usbHid_ != nullptr) {
+    updateUsbConnection(usbHid_->ready());
+  }
   if (outputQueue_ != nullptr) {
     PendingOutputReport report;
     while (xQueueReceive(outputQueue_, &report, 0) == pdTRUE) {
@@ -338,6 +448,7 @@ void CodexMicroBle::maintain() {
   }
 #endif
 #if defined(CODEX_BOARD_TAB5)
+  if (mode_ != TransportMode::Bluetooth) return;
   if (responseQueue_ == nullptr) return;
   PendingMessage pending;
   if (xQueueReceive(responseQueue_, &pending, 0) == pdTRUE) {
@@ -346,19 +457,20 @@ void CodexMicroBle::maintain() {
 #endif
 }
 
-#if defined(CODEX_BOARD_STICKS3)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
 void CodexMicroBle::queueOutput(const uint8_t* data, size_t length) {
   if (outputQueue_ == nullptr || data == nullptr || length == 0) return;
   PendingOutputReport report;
   report.length = static_cast<uint8_t>(min<size_t>(length, sizeof(report.data)));
   memcpy(report.data, data, report.length);
   if (xQueueSend(outputQueue_, &report, 0) != pdTRUE) {
-    Serial.println("BLE output queue full; report dropped");
+    Serial.println("HID output queue full; report dropped");
   }
 }
 #endif
 
 BondClearResult CodexMicroBle::clearBonds() {
+  if (mode_ != TransportMode::Bluetooth) return BondClearResult::NotApplicable;
   clearingBonds_ = true;
   BLEDevice::getAdvertising()->stop();
   Serial.println("BLE advertising stopped for unpair");
@@ -456,6 +568,7 @@ CodexMicroState CodexMicroBle::snapshot() {
 void CodexMicroBle::onConnected(bool connected) {
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
   state_.connected = connected;
+  state_.transport = mode_;
   state_.secured = false;
   state_.ready = false;
   state_.standby = false;
@@ -482,6 +595,30 @@ void CodexMicroBle::onConnected(bool connected) {
   rpcBuffer_.clear();
   Serial.printf("BLE host %s\n", connected ? "connected" : "disconnected");
 }
+
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+void CodexMicroBle::updateUsbConnection(bool connected) {
+  if (stateMutex_ == nullptr) return;
+  xSemaphoreTake(stateMutex_, portMAX_DELAY);
+  if (state_.connected == connected) {
+    xSemaphoreGive(stateMutex_);
+    return;
+  }
+  state_.connected = connected;
+  state_.secured = connected;
+  state_.ready = false;
+  state_.standby = false;
+  state_.diagnostic = connected ? "WAITING FOR CODEX" : "WAITING FOR USB";
+  state_.dirty = true;
+  state_.transport = TransportMode::Usb;
+  xSemaphoreGive(stateMutex_);
+  outputSeen_.store(false);
+  rpcBuffer_.clear();
+  initializationMethods_ = 0;
+  initializationRetries_ = 0;
+  Serial.printf("USB host %s\n", connected ? "connected" : "disconnected");
+}
+#endif
 
 void CodexMicroBle::onSecurity(bool encrypted, bool authenticated, bool bonded,
                                bool authorized) {
@@ -603,12 +740,17 @@ void CodexMicroBle::onOutput(const uint8_t* data, size_t length) {
   outputSeen_.store(true);
   lastValidRpcMs_.store(millis());
   xSemaphoreTake(stateMutex_, portMAX_DELAY);
-  state_.ready = state_.secured && inputSubscribed_;
+  state_.ready = mode_ == TransportMode::Usb
+                     ? state_.connected
+                     : (state_.secured && inputSubscribed_);
   readySeen_ = readySeen_ || state_.ready;
-  state_.standby = readySeen_ && !inputSubscribed_;
+  state_.standby = mode_ == TransportMode::Bluetooth && readySeen_ &&
+                   !inputSubscribed_;
   state_.diagnostic = state_.standby ? "STANDBY" :
       (state_.ready ? "" :
-       (state_.secured ? "WAITING FOR SUBSCRIBE" : "SECURING"));
+       (state_.secured ? (mode_ == TransportMode::Usb ? "WAITING FOR CODEX"
+                                                      : "WAITING FOR SUBSCRIBE")
+                       : "SECURING"));
   state_.dirty = true;
   xSemaphoreGive(stateMutex_);
   handleRpc(request);
@@ -712,36 +854,37 @@ void CodexMicroBle::sendSuccess(JsonVariantConst id) {
 
 void CodexMicroBle::sendJson(const String& json) {
 #if defined(CODEX_BOARD_TAB5)
-  if (responseQueue_ == nullptr || json.length() >= kPendingMessageCapacity) {
+  if (mode_ == TransportMode::Bluetooth &&
+      (responseQueue_ == nullptr || json.length() >= kPendingMessageCapacity)) {
     notifyFailureCount_.fetch_add(1);
     Serial.printf("BLE response queue unavailable/oversize bytes=%u\n",
                   static_cast<unsigned>(json.length()));
     return;
   }
-  PendingMessage pending;
-  pending.length = static_cast<uint16_t>(json.length());
-  memcpy(pending.data, json.c_str(), pending.length);
-  if (xQueueSend(responseQueue_, &pending, 0) != pdTRUE) {
-    notifyFailureCount_.fetch_add(1);
-    Serial.printf("BLE response queue full bytes=%u\n",
-                  static_cast<unsigned>(json.length()));
-  } else {
-    Serial.printf("BLE response queued bytes=%u depth=%u\n",
-                  static_cast<unsigned>(json.length()),
-                  static_cast<unsigned>(uxQueueMessagesWaiting(responseQueue_)));
+  if (mode_ == TransportMode::Bluetooth) {
+    PendingMessage pending;
+    pending.length = static_cast<uint16_t>(json.length());
+    memcpy(pending.data, json.c_str(), pending.length);
+    if (xQueueSend(responseQueue_, &pending, 0) != pdTRUE) {
+      notifyFailureCount_.fetch_add(1);
+      Serial.printf("BLE response queue full bytes=%u\n",
+                    static_cast<unsigned>(json.length()));
+    } else {
+      Serial.printf("BLE response queued bytes=%u depth=%u\n",
+                    static_cast<unsigned>(json.length()),
+                    static_cast<unsigned>(uxQueueMessagesWaiting(responseQueue_)));
+    }
+    return;
   }
-#else
-  transmitJson(json.c_str(), json.length());
 #endif
+  transmitJson(json.c_str(), json.length());
 }
 
 void CodexMicroBle::transmitJson(const char* json, size_t length) {
-  if (input_ == nullptr) {
-    return;
-  }
   if (!connected()) {
     return;
   }
+  if (mode_ == TransportMode::Bluetooth && input_ == nullptr) return;
 
   size_t offset = 0;
   const size_t framedLength = length + 1;
@@ -762,8 +905,18 @@ void CodexMicroBle::transmitJson(const char* json, size_t length) {
                           ? static_cast<uint8_t>(json[sourceOffset])
                           : static_cast<uint8_t>('\n');
     }
-    input_->setValue(report, sizeof(report));
-    input_->notify();
+    if (mode_ == TransportMode::Bluetooth) {
+      input_->setValue(report, sizeof(report));
+      input_->notify();
+    }
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+    else if (usbHid_ == nullptr || !usbHid_->send(report)) {
+      notifyFailureCount_.fetch_add(1);
+      break;
+    } else {
+      notifySuccessCount_.fetch_add(1);
+    }
+#endif
     offset += chunk;
     delay(4);
   }

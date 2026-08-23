@@ -34,7 +34,7 @@ Codex Micro 功能的蓝牙控制器。
 | 硬件 | M5Stack Core2 已完成实机验证；支持构建 M5Stack Tab5 固件 |
 | 主机系统 | 已测试 macOS |
 | 主机应用 | 支持 Codex Micro 的 ChatGPT 桌面端 |
-| 通信方式 | 仅支持 Bluetooth Low Energy HID |
+| 通信方式 | Core2：BLE HID；Tab5/StickS3：可切换 BLE 或 USB Vendor HID |
 | 构建系统 | PlatformIO + Arduino Framework |
 
 本项目于 2026 年 7 月 16 日在真实 Core2 硬件和 ChatGPT 桌面端上完成验证。
@@ -125,7 +125,8 @@ macOS/Linux 执行 `bash ./scripts/build.sh all --target clean`，Windows 执行
 
 OpenAI 官方 Codex Micro 使用说明位于
 [learn.chatgpt.com](https://learn.chatgpt.com/docs/features/codex-micro)。原键盘的
-USB 模式、物理配对控件、灯光硬件和额外层说明不适用于本 Core2 固件。
+原键盘的物理配对控件、灯光硬件和额外层说明不适用于本固件。Tab5 和
+StickS3 可在设备设置中选择 Bluetooth 或 USB；确认后会保存设置并重启。
 
 ## 操作说明
 

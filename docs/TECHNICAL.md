@@ -65,10 +65,11 @@ adapters cover callback and characteristic-value API differences. Upgrading eith
 change BLE field serialization, callback APIs, memory use, or pairing behavior
 and must be verified on a clean host pairing.
 
-## BLE HID identity
+## HID identity
 
-The device advertises as a generic BLE HID device with these compatibility
-values:
+The device exposes a generic vendor HID device with these compatibility values.
+Core2 uses BLE HOGP. StickS3 and Tab5 use BLE HOGP or native TinyUSB according
+to the saved, mutually exclusive transport setting.
 
 | Field | Value |
 | --- | --- |
@@ -122,6 +123,12 @@ Incoming output reports are appended to a string buffer and parsed with a
 next fragment. A new fragment beginning with `{"method"` resets an incomplete
 buffer, which allows the receiver to recover after a dropped request. Malformed
 JSON clears the buffer and writes a parse error to the serial log.
+
+USB uses the same Report ID 6 descriptor and 63-byte report bodies. TinyUSB
+supplies the report ID separately to the output callback; the firmware passes
+only the report body into the shared parser. USB connection state follows the
+mounted HID endpoint, and readiness begins after the first valid host RPC.
+Bluetooth is not initialized or advertised while USB mode is selected.
 
 The transport does not currently include sequence numbers, acknowledgements,
 checksums, retransmission, flow-control negotiation, encryption above BLE, or a
@@ -285,7 +292,8 @@ app before publishing a firmware release.
 
 ## Known limitations
 
-- BLE only; no USB HID transport
+- USB transport is available only on StickS3 and Tab5; Core2 remains BLE-only
+- USB enumeration requires physical macOS and Windows acceptance testing
 - One connected host at a time
 - No user-selectable Bluetooth slots
 - No conventional keyboard keys or text input

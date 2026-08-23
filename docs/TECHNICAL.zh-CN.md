@@ -243,7 +243,8 @@ Build Number，因此发布新固件前应再次使用最新桌面端测试协�
 
 ## 已知限制
 
-- 仅 BLE，不支持 USB HID 传输
+- USB HID 仅适用于 StickS3 和 Tab5；Core2 仍仅支持 BLE
+- USB 枚举仍需在实体 macOS 与 Windows 主机上验收
 - 同一时间只允许一个主机连接
 - 不支持用户选择多个蓝牙槽位
 - 不支持常规键盘按键或文字输入

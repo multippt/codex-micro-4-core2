@@ -2,9 +2,10 @@
 
 [简体中文](README.zh-CN.md)
 
-An independent, open-source compatibility firmware that turns an M5Stack Core2, Tab5, or StickS3
-into a Bluetooth controller for Codex Micro features in the ChatGPT desktop
-app.
+An independent, open-source compatibility firmware that turns an M5Stack Core2,
+Tab5, or StickS3 into a controller for Codex Micro features in the ChatGPT
+desktop app. Core2 uses Bluetooth; Tab5 and StickS3 can use either Bluetooth or
+USB.
 
 The firmware presents the Core2 as a BLE vendor HID device and provides a
 touchscreen interface for six Agent Keys, six Command Keys, four analog-stick
@@ -24,8 +25,9 @@ remapping, and push-to-talk integration are handled by ChatGPT Desktop.
 - Four touchscreen directions for actions assigned to the analog stick
 - Dial counterclockwise, clockwise, press, and 500 ms hold behavior
 - ChatGPT Desktop command and direction remapping
-- Core2 or Tab5 battery reporting over BLE HID
+- Battery reporting through the Codex Micro device-status protocol
 - Automatic BLE advertising after disconnection
+- Persisted Bluetooth/USB transport selection on StickS3 and Tab5
 - Responsive, flicker-free interface using a full-screen, PSRAM-backed `M5Canvas`
 
 This is a vendor-control surface, not a general-purpose Bluetooth keyboard.
@@ -34,15 +36,16 @@ This is a vendor-control surface, not a general-purpose Bluetooth keyboard.
 
 | Component | Supported or tested state |
 | --- | --- |
-| Hardware | M5Stack Core2 validated; M5Stack Tab5 build supported |
-| Host OS | macOS tested |
+| Hardware | M5Stack Core2 validated; M5Stack Tab5 and StickS3 builds supported |
+| Host OS | macOS tested; Windows compatibility requires physical validation |
 | Host app | ChatGPT Desktop with Codex Micro support |
-| Transport | Bluetooth Low Energy HID only |
+| Transport | Core2: BLE HID; Tab5/StickS3: selectable BLE or USB vendor HID |
 | Build system | PlatformIO with Arduino framework |
 
 The implementation was validated on physical Core2 hardware with ChatGPT
-Desktop on July 16, 2026. Other Core2 revisions, other operating systems, USB
-control, and Work Louder Input have not been validated.
+Desktop on July 16, 2026. USB firmware builds successfully for StickS3 and
+Tab5, but USB enumeration and bidirectional traffic still require validation on
+physical macOS and Windows hosts.
 
 ## Requirements
 
@@ -121,10 +124,13 @@ output. Build outputs can be cleaned without removing installed packages with
 `bash ./scripts/build.sh all --target clean` on macOS/Linux or
 `./scripts/build.ps1 all --target clean` on Windows.
 
-## Pair with ChatGPT Desktop
+## Connect to ChatGPT Desktop
 
-1. Flash the firmware and restart the Core2.
-2. Open macOS Bluetooth settings and pair the device named **Codex Micro**.
+1. Flash the firmware and restart the device. New installations start in
+   Bluetooth mode.
+2. In Bluetooth mode, pair the device named **Codex Micro** in the operating
+   system's Bluetooth settings. In USB mode, connect the StickS3 or the Tab5's
+   USB-C OTG port with a data-capable cable.
 3. Open ChatGPT Desktop. Allow **Input Monitoring** when macOS prompts for it.
 4. Open **Settings > Codex Micro** after the device is detected.
 5. Choose Agent Key assignments, Command Key actions, analog directions, and
@@ -136,9 +142,16 @@ settings, restart the Core2, and pair it again.
 
 OpenAI's official Codex Micro usage documentation is available at
 [learn.chatgpt.com](https://learn.chatgpt.com/docs/features/codex-micro).
-Instructions specific to the original keyboard, including its USB mode,
-physical pairing control, lighting hardware, and extra layers, do not apply to
-this firmware.
+Instructions specific to the original keyboard's physical connection selector,
+lighting hardware, and extra layers do not apply to this firmware.
+
+### Select Bluetooth or USB
+
+StickS3 and Tab5 use one transport at a time. On StickS3, open **Config** and
+select the transport row. On Tab5, open **Settings** and tap the transport row.
+Confirm the change; the firmware saves it and restarts. Connecting a USB cable
+while Bluetooth is selected supplies power but does not change transports.
+Bluetooth unpair controls are unavailable while USB mode is active.
 
 ## Controls
 
@@ -147,7 +160,8 @@ this firmware.
 StickS3 uses a portrait, non-touch four-page interface. **Agents** shows six
 numbered tiles in a 2 x 3 grid; **Commands** uses large labels plus tick/cross
 icons; **Navigate** provides directions and dial actions; **Config** provides
-Unpair and Mute. Select the bottom `<` or `>` tiles to change pages; the same
+Unpair, transport, and volume controls. Select the bottom `<` or `>` tiles to
+change pages; the same
 arrow remains selected on the destination page for quick repeated navigation.
 
 Press the main button (`BtnA`) to activate the selected tile. Single-press the

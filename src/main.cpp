@@ -13,11 +13,11 @@
 #include <array>
 
 #include "BoardProfile.h"
-#include "CodexMicroBle.h"
+#include "CodexMicro.h"
 
 namespace {
 
-enum class Page : uint8_t { Tasks, Commands, Control, Navigate };
+enum class Page : uint8_t { Tasks, Commands, Control, Navigate, Settings };
 enum class UnpairNotice : uint8_t { None, Success, Failure, Restarting };
 
 struct TouchAction {
@@ -75,7 +75,7 @@ constexpr uint8_t kControlCommandOrder[] = {0, 3, 1, 2, 4, 5};
 constexpr char kPendingUnpairKey[] = "pending-unpair";
 #endif
 
-CodexMicroBle codex;
+CodexMicro codex;
 CodexMicroState state;
 M5Canvas canvas(&M5.Display);
 #if defined(CODEX_BOARD_TAB5)
@@ -122,6 +122,7 @@ uint8_t pendingChargingSamples = 0;
 int pendingBatteryLevel = -1;
 uint8_t pendingBatterySamples = 0;
 bool bootUnpairPending = false;
+bool transportConfirmationPending = false;
 #endif
 
 constexpr uint32_t kUnpairHoldMs = 3000;
@@ -204,7 +205,11 @@ void formatConnectionStatus(char* status, size_t size) {
     snprintf(status, size, "STANDBY");
   } else {
 #if defined(CODEX_BOARD_TAB5)
-    snprintf(status, size, "%s", state.ready ? "LINK" : "PAIR");
+    if (state.transport == TransportMode::Usb) {
+      snprintf(status, size, "%s", state.ready ? "USB LINK" : "USB");
+    } else {
+      snprintf(status, size, "%s", state.ready ? "BT LINK" : "BT PAIR");
+    }
 #else
     snprintf(status, size, "%s", state.ready ? "LIVE" : "PAIR");
 #endif
@@ -330,7 +335,7 @@ void drawUnpairNotice() {
     drawCentered("FORGET ON HOST", layout.width / 2, y + height * 3 / 5,
                  layout.textScale, kMuted);
   } else if (unpairNotice == UnpairNotice::Restarting) {
-    drawCentered("RESTARTING BLE", layout.width / 2, y + height / 2,
+    drawCentered("RESTARTING", layout.width / 2, y + height / 2,
                  2 * layout.textScale, kAccent);
   } else {
     drawCentered("UNPAIR FAILED", layout.width / 2, y + height / 2,
@@ -340,9 +345,9 @@ void drawUnpairNotice() {
 
 void drawTabs() {
 #if defined(CODEX_BOARD_TAB5)
-  const char* labels[] = {"CONTROL", "NAVIGATE"};
-  const Page pages[] = {Page::Control, Page::Navigate};
-  constexpr int tabCount = 2;
+  const char* labels[] = {"CONTROL", "NAVIGATE", "SETTINGS"};
+  const Page pages[] = {Page::Control, Page::Navigate, Page::Settings};
+  constexpr int tabCount = 3;
 #else
   const char* labels[] = {"TASKS", "COMMANDS", "NAVIGATE"};
   const Page pages[] = {Page::Tasks, Page::Commands, Page::Navigate};
@@ -520,6 +525,40 @@ void drawNavigate() {
              "TAP / HOLD SETTINGS");
 }
 
+#if defined(CODEX_BOARD_TAB5)
+void settingsRects(Rect& transport, Rect& sound, Rect& unpair) {
+  const Rect bounds = contentBounds();
+  const int rowHeight = (bounds.height - 2 * layout.gap) / 3;
+  transport = {bounds.x, bounds.y, bounds.width, rowHeight};
+  sound = {bounds.x, bounds.y + rowHeight + layout.gap, bounds.width,
+           rowHeight};
+  unpair = {bounds.x, bounds.y + 2 * (rowHeight + layout.gap), bounds.width,
+            bounds.height - 2 * (rowHeight + layout.gap)};
+}
+
+void drawSettings() {
+  Rect transport, sound, unpair;
+  settingsRects(transport, sound, unpair);
+  const bool bluetooth = state.transport == TransportMode::Bluetooth;
+  const char* transportTitle = transportConfirmationPending
+                                   ? (bluetooth ? "CONFIRM SWITCH TO USB"
+                                                : "CONFIRM SWITCH TO BLUETOOTH")
+                                   : (bluetooth ? "TRANSPORT: BLUETOOTH"
+                                                : "TRANSPORT: USB");
+  drawButton(transport.x, transport.y, transport.width, transport.height,
+             transportTitle, kAccent, false,
+             transportConfirmationPending ? "TAP AGAIN TO SAVE AND RESTART"
+                                            : "TAP TO CHANGE");
+  drawButton(sound.x, sound.y, sound.width, sound.height,
+             soundEnabled ? "SOUND: ON" : "SOUND: MUTED", 0xFFE0, false,
+             "TAP TO TOGGLE");
+  drawButton(unpair.x, unpair.y, unpair.width, unpair.height,
+             bluetooth ? "UNPAIR BLUETOOTH" : "UNPAIR UNAVAILABLE IN USB MODE",
+             bluetooth ? 0xF800 : kMuted, false,
+             bluetooth ? "PRESS AND HOLD FOR 3 SECONDS" : nullptr);
+}
+#endif
+
 void renderScreen() {
   canvas.fillScreen(kBackground);
   drawHeader();
@@ -537,6 +576,11 @@ void renderScreen() {
       break;
     case Page::Navigate:
       drawNavigate();
+      break;
+    case Page::Settings:
+#if defined(CODEX_BOARD_TAB5)
+      drawSettings();
+#endif
       break;
   }
   drawTabs();
@@ -653,6 +697,7 @@ bool inRect(int x, int y, int left, int top, int width, int height) {
 
 bool isUnpairTarget(int x, int y) {
 #if defined(CODEX_BOARD_TAB5)
+  if (state.transport != TransportMode::Bluetooth) return false;
   char status[24];
   formatConnectionStatus(status, sizeof(status));
   const HeaderControlLayout controls = headerControlLayout(status);
@@ -671,6 +716,8 @@ bool isSoundTarget(int x, int y) {
          x >= controls.soundLeft && x < controls.soundRight;
 }
 
+void startUnpairHold();
+
 void toggleSound() {
   soundEnabled = !soundEnabled;
   preferences.begin("codex-micro", false);
@@ -678,6 +725,48 @@ void toggleSound() {
   preferences.end();
   Serial.printf("Speaker notifications %s\n", soundEnabled ? "enabled" : "muted");
   requestDraw();
+}
+
+bool handleSettingsPress(int x, int y) {
+  if (page != Page::Settings) return false;
+  if (y >= layout.contentBottom) return false;
+  Rect transport, sound, unpair;
+  settingsRects(transport, sound, unpair);
+  if (inRect(x, y, transport.x, transport.y, transport.width,
+             transport.height)) {
+    if (!transportConfirmationPending) {
+      transportConfirmationPending = true;
+      drawScreen();
+      return true;
+    }
+    const TransportMode next = state.transport == TransportMode::Bluetooth
+                                   ? TransportMode::Usb
+                                   : TransportMode::Bluetooth;
+    if (!CodexMicro::saveMode(next)) {
+      transportConfirmationPending = false;
+      unpairNotice = UnpairNotice::Failure;
+      unpairNoticeUntilMs = millis() + kUnpairNoticeMs;
+      drawScreen();
+      return true;
+    }
+    unpairNotice = UnpairNotice::Restarting;
+    drawScreen();
+    delay(750);
+    ESP.restart();
+    return true;
+  }
+  transportConfirmationPending = false;
+  if (inRect(x, y, sound.x, sound.y, sound.width, sound.height)) {
+    toggleSound();
+    return true;
+  }
+  if (state.transport == TransportMode::Bluetooth &&
+      inRect(x, y, unpair.x, unpair.y, unpair.width, unpair.height)) {
+    startUnpairHold();
+    return true;
+  }
+  drawScreen();
+  return true;
 }
 
 void processThreadNotifications(const CodexMicroState& latest) {
@@ -751,7 +840,9 @@ void finishUnpairHold() {
 TouchAction actionAt(int x, int y) {
   if (y >= layout.contentBottom) {
 #if defined(CODEX_BOARD_TAB5)
-    page = x < layout.width / 2 ? Page::Control : Page::Navigate;
+    const Page pages[] = {Page::Control, Page::Navigate, Page::Settings};
+    page = pages[min(2, x * 3 / layout.width)];
+    transportConfirmationPending = false;
 #else
     const Page pages[] = {Page::Tasks, Page::Commands, Page::Navigate};
     page = pages[min(2, x * 3 / layout.width)];
@@ -1010,6 +1101,11 @@ void loop() {
   codex.maintain();
   const auto touch = M5.Touch.getDetail();
   if (touch.wasPressed()) {
+#if defined(CODEX_BOARD_TAB5)
+    if (!unpairTriggered && handleSettingsPress(touch.x, touch.y)) {
+      // Settings actions are handled locally and never emit HID controls.
+    } else
+#endif
     if (!unpairTriggered && isUnpairTarget(touch.x, touch.y)) {
       startUnpairHold();
 #if defined(CODEX_BOARD_TAB5)

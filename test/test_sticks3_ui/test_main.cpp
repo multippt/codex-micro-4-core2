@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include "StickS3Controller.h"
+#include "TransportMode.h"
 
 using codex_micro::StickButtonController;
 using codex_micro::StickGesture;
@@ -65,10 +66,35 @@ void test_page_counts_and_wrap() {
   ui.changePage(1);
   TEST_ASSERT_EQUAL_UINT8(9, ui.itemCount());
   ui.changePage(1);
-  TEST_ASSERT_EQUAL_UINT8(5, ui.itemCount());
+  TEST_ASSERT_EQUAL_UINT8(6, ui.itemCount());
   ui.changePage(1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(StickPage::Agents),
                         static_cast<int>(ui.page()));
+}
+
+void test_transport_switch_requires_confirmation() {
+  StickUiController ui;
+  ui.changePage(-1);
+  ui.beginTransportConfirmation();
+  TEST_ASSERT_TRUE(ui.confirmingTransport());
+  TEST_ASSERT_TRUE(ui.confirmingAction());
+  TEST_ASSERT_TRUE(ui.confirmsTransport());
+  ui.move(-1);
+  TEST_ASSERT_FALSE(ui.confirmsTransport());
+  ui.cancelTransportConfirmation();
+  TEST_ASSERT_FALSE(ui.confirmingTransport());
+  TEST_ASSERT_EQUAL_UINT8(1, ui.selection());
+}
+
+void test_transport_values_default_invalid_data_to_bluetooth() {
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TransportMode::Bluetooth),
+                        static_cast<int>(normalizeTransportMode(0)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TransportMode::Usb),
+                        static_cast<int>(normalizeTransportMode(1)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TransportMode::Bluetooth),
+                        static_cast<int>(normalizeTransportMode(2)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TransportMode::Bluetooth),
+                        static_cast<int>(normalizeTransportMode(255)));
 }
 
 void test_agent_selection_is_isolated_from_other_pages() {
@@ -103,7 +129,7 @@ void test_unpair_defaults_to_confirm_and_can_cancel() {
 
 void test_next_arrow_persists_across_all_pages() {
   StickUiController ui;
-  const uint8_t destinationCounts[] = {8, 9, 5, 8};
+  const uint8_t destinationCounts[] = {8, 9, 6, 8};
   for (uint8_t count : destinationCounts) {
     ui.changePage(1, StickPageSelection::NextArrow);
     TEST_ASSERT_EQUAL_UINT8(count, ui.itemCount());
@@ -115,7 +141,7 @@ void test_next_arrow_persists_across_all_pages() {
 
 void test_previous_arrow_persists_across_all_pages() {
   StickUiController ui;
-  const uint8_t destinationCounts[] = {5, 9, 8, 8};
+  const uint8_t destinationCounts[] = {6, 9, 8, 8};
   for (uint8_t count : destinationCounts) {
     ui.changePage(-1, StickPageSelection::PreviousArrow);
     TEST_ASSERT_EQUAL_UINT8(count, ui.itemCount());
@@ -231,6 +257,8 @@ int main(int, char**) {
   RUN_TEST(test_page_counts_and_wrap);
   RUN_TEST(test_agent_selection_is_isolated_from_other_pages);
   RUN_TEST(test_unpair_defaults_to_confirm_and_can_cancel);
+  RUN_TEST(test_transport_switch_requires_confirmation);
+  RUN_TEST(test_transport_values_default_invalid_data_to_bluetooth);
   RUN_TEST(test_next_arrow_persists_across_all_pages);
   RUN_TEST(test_previous_arrow_persists_across_all_pages);
   RUN_TEST(test_default_page_change_selects_first_action);

@@ -13,6 +13,8 @@
 #include <array>
 #include <atomic>
 
+#include "TransportMode.h"
+
 struct ThreadLight {
   uint32_t color = 0;
   float brightness = 0.0f;
@@ -40,9 +42,15 @@ struct CodexMicroState {
   uint32_t threadUpdateSequence = 0;
   String diagnostic;
   bool dirty = true;
+  TransportMode transport = TransportMode::Bluetooth;
 };
 
-enum class BondClearResult : uint8_t { Success, Failure, RestartRequired };
+enum class BondClearResult : uint8_t {
+  Success,
+  Failure,
+  RestartRequired,
+  NotApplicable
+};
 
 class CodexMicroBle {
  public:
@@ -51,6 +59,9 @@ class CodexMicroBle {
   static constexpr uint8_t kReportId = 6;
 
   void begin();
+  TransportMode mode() const { return mode_; }
+  static TransportMode loadMode();
+  static bool saveMode(TransportMode mode);
   void setBattery(uint8_t percentage, bool charging);
   void sendKey(const char* key, uint8_t action, int8_t agent = -1);
   void sendJoystick(float angle, float distance);
@@ -63,15 +74,21 @@ class CodexMicroBle {
   class ServerCallbacks;
   class InputCallbacks;
   class OutputCallbacks;
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
+  class UsbHidDevice;
+#endif
   friend class CodexSecurityCallbacks;
 
   void onConnected(bool connected);
   void onSecurity(bool encrypted, bool authenticated, bool bonded, bool authorized);
   void onSubscribed(uint16_t value);
   void onNotifyStatus(int status, uint32_t code);
-#if defined(CODEX_BOARD_STICKS3)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
   void queueOutput(const uint8_t* data, size_t length);
+  void beginUsb();
+  void updateUsbConnection(bool connected);
 #endif
+  void beginBle();
   void onOutput(const uint8_t* data, size_t length);
   void handleRpc(const JsonDocument& request);
   void sendResult(JsonVariantConst id, JsonVariantConst result);
@@ -94,12 +111,13 @@ class CodexMicroBle {
   };
   QueueHandle_t responseQueue_ = nullptr;
 #endif
-#if defined(CODEX_BOARD_STICKS3)
+#if defined(CODEX_BOARD_TAB5) || defined(CODEX_BOARD_STICKS3)
   struct PendingOutputReport {
     uint8_t length = 0;
     uint8_t data[64] = {};
   };
   QueueHandle_t outputQueue_ = nullptr;
+  UsbHidDevice* usbHid_ = nullptr;
 #endif
   CodexMicroState state_;
   std::array<ThreadLight, 6> cachedVisibleThreads_;
@@ -117,4 +135,9 @@ class CodexMicroBle {
   uint8_t batteryPercentage_ = 100;
   bool charging_ = false;
   std::atomic<bool> clearingBonds_{false};
+  TransportMode mode_ = TransportMode::Bluetooth;
 };
+
+// Public transport-neutral name. The legacy implementation filename is kept so
+// existing PlatformIO source filters and downstream includes continue to work.
+using CodexMicro = CodexMicroBle;

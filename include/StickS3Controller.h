@@ -66,14 +66,18 @@ class StickUiController {
   uint8_t selection() const { return selection_; }
   uint8_t selectedAgent() const { return selectedAgent_; }
   bool confirmingUnpair() const { return confirmingUnpair_; }
+  bool confirmingTransport() const { return confirmingTransport_; }
+  bool confirmingAction() const {
+    return confirmingUnpair_ || confirmingTransport_;
+  }
 
   uint8_t itemCount() const {
-    if (confirmingUnpair_) return 2;
+    if (confirmingAction()) return 2;
     switch (page_) {
       case StickPage::Agents: return 8;
       case StickPage::Commands: return 8;
       case StickPage::Navigate: return 9;
-      case StickPage::Config: return 5;
+      case StickPage::Config: return 6;
       default: return 0;
     }
   }
@@ -95,6 +99,7 @@ class StickUiController {
     while (next < 0) next += count;
     page_ = static_cast<StickPage>(next % count);
     confirmingUnpair_ = false;
+    confirmingTransport_ = false;
     if (destination == StickPageSelection::PreviousArrow) {
       selection_ = itemCount() - 2;
     } else if (destination == StickPageSelection::NextArrow) {
@@ -114,6 +119,18 @@ class StickUiController {
     selection_ = 0;
   }
   bool confirmsUnpair() const { return confirmingUnpair_ && selection_ == 1; }
+  void beginTransportConfirmation() {
+    confirmingTransport_ = true;
+    selection_ = 1;
+  }
+  void cancelTransportConfirmation() {
+    confirmingTransport_ = false;
+    page_ = StickPage::Config;
+    selection_ = 1;
+  }
+  bool confirmsTransport() const {
+    return confirmingTransport_ && selection_ == 1;
+  }
 
   void noteAgent(uint8_t agent) {
     if (agent < 6) {
@@ -127,6 +144,7 @@ class StickUiController {
   uint8_t selection_ = 0;
   uint8_t selectedAgent_ = 0;
   bool confirmingUnpair_ = false;
+  bool confirmingTransport_ = false;
 };
 
 class StickNotificationController {

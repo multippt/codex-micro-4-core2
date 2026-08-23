@@ -9,7 +9,7 @@
 #include <cmath>
 
 #include "BoardProfile.h"
-#include "CodexMicroBle.h"
+#include "CodexMicro.h"
 #include "StickS3Controller.h"
 
 #if !defined(CODEX_BOARD_STICKS3)
@@ -48,7 +48,7 @@ const char* kAgentKeys[] = {"AG00", "AG01", "AG02", "AG03", "AG04", "AG05"};
 const char* kCommandKeys[] = {"ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT12"};
 constexpr uint8_t kCommandOrder[] = {0, 3, 1, 2, 4, 5};
 
-CodexMicroBle codex;
+CodexMicro codex;
 CodexMicroState state;
 M5Canvas canvas(&M5.Display);
 Preferences preferences;
@@ -151,6 +151,7 @@ void drawSpeaker(int x, int y) {
 
 const char* pageTitle() {
   if (ui.confirmingUnpair()) return "UNPAIR?";
+  if (ui.confirmingTransport()) return "SWITCH MODE?";
   switch (ui.page()) {
     case StickPage::Agents: return "AGENTS";
     case StickPage::Commands: return "COMMANDS";
@@ -167,8 +168,13 @@ void drawHeader() {
   canvas.setTextColor(kText);
   canvas.drawString(pageTitle(), 4, kHeaderHeight / 2);
   drawSpeaker(canvas.width() - 54, kHeaderHeight / 2);
-  drawBluetooth(canvas.width() - 35, kHeaderHeight / 2,
-                state.connected ? kBlue : kMuted);
+  if (state.transport == TransportMode::Bluetooth) {
+    drawBluetooth(canvas.width() - 35, kHeaderHeight / 2,
+                  state.connected ? kBlue : kMuted);
+  } else {
+    drawText("USB", canvas.width() - 31, kHeaderHeight / 2, 1,
+             state.connected ? kText : kMuted);
+  }
   drawBattery(canvas.width() - 25, kHeaderHeight / 2);
 }
 
@@ -299,20 +305,25 @@ void drawNavigate() {
 
 void drawConfig() {
   const int top = kHeaderHeight + 3;
-  const Rect unpair{3, top, canvas.width() - 6, 88};
+  const Rect unpair{3, top, canvas.width() - 6, 55};
+  const Rect transport{3, unpair.y + unpair.h + 3, canvas.width() - 6, 42};
   constexpr int volumeButtonSize = 44;
-  const int volumeY = unpair.y + unpair.h + 18;
+  const int volumeY = transport.y + transport.h + 8;
   const Rect decrease{3, volumeY, volumeButtonSize, volumeButtonSize};
   const Rect increase{canvas.width() - 3 - volumeButtonSize, volumeY,
                       volumeButtonSize, volumeButtonSize};
-  drawTile(unpair, 0, "UNPAIR");
-  drawTile(decrease, 1, "-");
-  drawTile(increase, 2, "+");
+  drawTile(unpair, 0,
+           state.transport == TransportMode::Bluetooth ? "UNPAIR" : "USB ACTIVE");
+  drawTile(transport, 1,
+           state.transport == TransportMode::Bluetooth ? "MODE: BLUETOOTH"
+                                                       : "MODE: USB");
+  drawTile(decrease, 2, "-");
+  drawTile(increase, 3, "+");
   char volumeText[4];
   snprintf(volumeText, sizeof(volumeText), "%u", volume.level());
   drawText(volumeText, canvas.width() / 2, volumeY + volumeButtonSize / 2,
            2, volume.active() ? kText : kMuted);
-  drawFooter(3, 4);
+  drawFooter(4, 5);
 }
 
 void drawUnpairConfirmation() {
@@ -347,7 +358,7 @@ void drawNotice() {
 void drawScreen() {
   canvas.fillScreen(kBackground);
   drawHeader();
-  if (ui.confirmingUnpair()) {
+  if (ui.confirmingAction()) {
     drawUnpairConfirmation();
   } else {
     switch (ui.page()) {
@@ -385,7 +396,7 @@ void handleGesture(StickGesture gesture) {
   const uint8_t previousSelection = ui.selection();
   if (gesture == StickGesture::Next) ui.move(1);
   else if (gesture == StickGesture::Previous) ui.move(-1);
-  else if (gesture == StickGesture::NextPage && !ui.confirmingUnpair()) {
+  else if (gesture == StickGesture::NextPage && !ui.confirmingAction()) {
     ui.changePage(1);
   }
   if (gesture != StickGesture::None) {
@@ -444,8 +455,33 @@ void finishUnpair() {
   drawScreen();
 }
 
+void finishTransportSwitch() {
+  const TransportMode next = state.transport == TransportMode::Bluetooth
+                                 ? TransportMode::Usb
+                                 : TransportMode::Bluetooth;
+  if (!CodexMicro::saveMode(next)) {
+    notice = Notice::Failed;
+    noticeUntilMs = millis() + kNoticeMs;
+    ui.cancelTransportConfirmation();
+    drawScreen();
+    return;
+  }
+  notice = Notice::Restarting;
+  drawScreen();
+  delay(750);
+  ESP.restart();
+}
+
 void activateSelection() {
   if (unpairBusy) return;
+  if (ui.confirmingTransport()) {
+    if (ui.confirmsTransport()) finishTransportSwitch();
+    else {
+      ui.cancelTransportConfirmation();
+      drawScreen();
+    }
+    return;
+  }
   if (ui.confirmingUnpair()) {
     if (ui.confirmsUnpair()) finishUnpair();
     else {
@@ -484,9 +520,11 @@ void activateSelection() {
       else if (selected == 6) tapKey("ENC");
       break;
     case StickPage::Config:
-      if (selected == 0) ui.beginUnpairConfirmation();
-      else if (selected == 1) changeVolume(-1);
-      else if (selected == 2) changeVolume(1);
+      if (selected == 0 && state.transport == TransportMode::Bluetooth) {
+        ui.beginUnpairConfirmation();
+      } else if (selected == 1) ui.beginTransportConfirmation();
+      else if (selected == 2) changeVolume(-1);
+      else if (selected == 3) changeVolume(1);
       drawScreen();
       break;
     default: break;
